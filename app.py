@@ -5,6 +5,7 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
+# --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
@@ -18,9 +19,8 @@ class ProfilePen(BasePen):
 
     def _curveToOne(self, p1, p2, p3):
         p0 = self._getCurrentPoint()
-        # DYNAMIC PRECISION: Scale sampling density based on curve length
         approx_len = math.dist(p0, p1) + math.dist(p1, p2) + math.dist(p2, p3)
-        steps = max(8, min(30, int(approx_len / 20))) # Dynamic, smooth sampling
+        steps = max(8, min(30, int(approx_len / 20)))
         
         for i in range(steps + 1):
             t = i / float(steps)
@@ -47,7 +47,6 @@ def get_glyph_profiles(font, step_size=10):
         pen = ProfilePen(glyph_set)
         glyph = glyph_set[glyph_name]
         
-        # FIX 1: Safety wrapper preventing crashes on missing outline data
         try:
             glyph.draw(pen)
         except Exception:
@@ -92,10 +91,75 @@ def analyze_character_set(font):
         except Exception:
             continue
             
-    # Intelligently tag the font style
     if stats["caps"] > 0 and stats["lower"] == 0:
         stats["type"] = "All Caps / Display"
     elif stats["total"] > 500:
         stats["type"] = "Extended / Multilingual"
         
     return stats
+
+def calculate_kerning(profiles, pairs_to_kern, target_gap=40):
+    kern_pairs = {}
+    for left, right in pairs_to_kern:
+        if left in profiles and right in profiles:
+            prof_l = profiles[left]["right"]
+            prof_r = profiles[right]["left"]
+            common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
+            if not common_ys: 
+                continue
+            # Distance formula taking glyph advance into account
+            min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
+            kern_val = int(target_gap - min_dist)
+            if abs(kern_val) > 2:
+                kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
+    return kern_pairs
+
+# --- 2. STREAMLIT INTERFACE ---
+st.set_page_config(page_title="LazyKern", layout="centered")
+
+st.title("LazyKern ✒️")
+st.write("A clean, dynamic font auto-kerning utility tool.")
+
+uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
+
+if uploaded_file:
+    gap = st.slider("Target Gap Distance", min_value=10, max_value=100, value=40, step=5)
+    
+    if st.button("Analyze & Process Font"):
+        with st.spinner("Executing geometric matrix scan..."):
+            # 1. Load data
+            font = TTFont(io.BytesIO(uploaded_file.read()))
+            
+            # 2. Extract telemetry
+            stats = analyze_character_set(font)
+            profiles = get_glyph_profiles(font)
+            
+            # 3. Generate kerning pairs
+            glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
+            pairs_to_kern = [(a, b) for a in glyphs for b in glyphs]
+            kern_pairs = calculate_kerning(profiles, pairs_to_kern, target_gap=gap)
+            
+            # 4. Inject GPOS table
+            fea_lines = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
+            addOpenTypeFeaturesFromString(font, "\n".join(fea_lines))
+            
+            # 5. Output file compilation
+            out = io.BytesIO()
+            font.save(out)
+            
+            # 6. Display visual completion card
+            st.success("Analysis Complete!")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(label="Font Style Profile", value=stats["type"])
+                st.metric(label="Total Scanned Characters", value=stats["total"])
+            with col2:
+                st.metric(label="Generated Kern Pairs", value=len(kern_pairs))
+                st.metric(label="Glyph Node Count", value=sum(p["nodes_count"] for p in profiles.values()))
+                
+            st.download_button(
+                label="📥 Download Kerned Font File", 
+                data=out.getvalue(), 
+                file_name=f"kerned_{uploaded_file.name}"
+            )
