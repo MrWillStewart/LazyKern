@@ -20,32 +20,29 @@ class ProfilePen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
         self.points = []
-
     def _moveTo(self, p): self.points.append(p)
     def _lineTo(self, p):
         p0 = self._getCurrentPoint()
         if p0:
             dist = math.dist(p0, p)
-            steps = max(2, int(dist / 2.0))
+            steps = max(1, int(dist / 10.0)) # Reduced density for speed
             for i in range(steps + 1):
                 t = i / float(steps)
                 self.points.append((p0[0] + (p[0] - p0[0]) * t, p0[1] + (p[1] - p0[1]) * t))
         else: self.points.append(p)
-
     def _curveToOne(self, p1, p2, p3):
         p0 = self._getCurrentPoint()
         if not p0: return
-        steps = 20
+        steps = 5 # Reduced density for speed
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]
             y = (1-t)**3 * p0[1] + 3*(1-t)**2 * t * p1[1] + 3*(1-t) * t**2 * p2[1] + t**3 * p3[1]
             self.points.append((x, y))
-
     def _qCurveToOne(self, p1, p2):
         p0 = self._getCurrentPoint()
         if not p0: return
-        steps = 20
+        steps = 5 # Reduced density for speed
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
@@ -60,58 +57,73 @@ def get_glyph_profiles(font):
         try: glyph_set[name].draw(pen)
         except: continue
         if not pen.points: continue
-        profiles[name] = {"points": pen.points, "advance": glyph_set[name].width}
+        
+        # Calculate bounding box for fast culling
+        xs = [p[0] for p in pen.points]
+        profiles[name] = {
+            "points": pen.points, 
+            "advance": glyph_set[name].width,
+            "min_x": min(xs), "max_x": max(xs)
+        }
     return profiles
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    for left, right in pairs_to_kern:
+    progress_bar = st.progress(0)
+    total_pairs = len(pairs_to_kern)
+    
+    for i, (left, right) in enumerate(pairs_to_kern):
+        if i % 100 == 0: progress_bar.progress(i / total_pairs)
+        
         if left not in profiles or right not in profiles: continue
         
+        # --- CULLING: Only process if bounding boxes imply potential overlap ---
+        # If right glyph's min_x is already far from left glyph's max_x, skip calculation.
+        if (profiles[right]["min_x"] + profiles[left]["advance"]) > (profiles[left]["max_x"] + target_gap):
+            continue
+            
+        # Collision calculation (Simplified slicing)
         points_l = profiles[left]["points"]
         advance_l = profiles[left]["advance"]
         points_r = profiles[right]["points"]
         
-        current_kern = target_gap - 100
-        # SAFETY LIMIT: Stop the loop if we push too far (prevents infinite hanging)
-        safety_limit = 0
+        # Check collision at y-levels
+        collision_detected = False
+        needed_kern = target_gap - 100 
         
-        while safety_limit < 50:
-            collision = False
-            for lx, ly in points_l:
-                for rx, ry in points_r:
-                    if abs(ly - ry) < 5: 
-                        if (rx + advance_l + current_kern) - lx < 10:
-                            collision = True
-                            break
-                if collision: break
+        # Only check Y-slices that overlap
+        for lx, ly in points_l:
+            for rx, ry in points_r:
+                if abs(ly - ry) < 5:
+                    dist = (rx + advance_l) - lx
+                    if dist < target_gap:
+                        needed_kern = max(needed_kern, target_gap - dist)
+        
+        if needed_kern > 0:
+            kern_pairs[(left, right)] = int(round(needed_kern / 5.0) * 5)
             
-            if not collision: break
-            current_kern += 5
-            safety_limit += 1
-        
-        if abs(current_kern) > 2:
-            kern_pairs[(left, right)] = int(round(current_kern / 5.0) * 5)
+    progress_bar.empty()
     return kern_pairs
 
 # --- 2. STREAMLIT RUNTIME ---
 st.set_page_config(page_title="LazyKern Pro", layout="centered")
 inject_pro_cleaner()
-
 st.title("LazyKern Pro")
 uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 
-# Only proceed if a file exists
 if uploaded_file is not None:
     font_bytes = uploaded_file.read()
     font = TTFont(io.BytesIO(font_bytes))
     
-    with st.spinner("Running deep-geometry collision simulation..."):
-        profiles = get_glyph_profiles(font)
-        glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
-        pairs = [(a, b) for a in glyphs for b in glyphs]
-        
-        kern_pairs = calculate_kerning(profiles, pairs, target_gap=60)
+    # Process
+    profiles = get_glyph_profiles(font)
+    glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
+    pairs = [(a, b) for a in glyphs for b in glyphs]
+    
+    gap = st.slider("Target Gap", 10, 100, 60, 5)
+    
+    if st.button("Generate Kern"):
+        kern_pairs = calculate_kerning(profiles, pairs, target_gap=gap)
         
         if kern_pairs:
             fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
@@ -120,12 +132,8 @@ if uploaded_file is not None:
         out = io.BytesIO()
         font.save(out)
         active_bytes = out.getvalue()
-
-    st.success("Simulation Complete. Font kerning enforced.")
-    
-    b64 = base64.b64encode(active_bytes).decode('utf-8')
-    st.markdown(f"""<style>@font-face {{font-family: 'LiveFont'; src: url('data:font/ttf;charset=utf-8;base64,{b64}');}} .tester {{font-family: 'LiveFont'; font-size: 48px; width: 100%; border: 1px solid #ccc; padding: 10px;}}</style>""", unsafe_allow_html=True)
-    st.markdown('<textarea class="tester">AVAW ST GR TEST.</textarea>', unsafe_allow_html=True)
-    st.download_button("Download Kerned Font", active_bytes, f"kerned_{uploaded_file.name}")
+        
+        st.success("Kerning complete!")
+        st.download_button("Download Kerned Font", active_bytes, f"kerned_{uploaded_file.name}")
 else:
-    st.info("Upload a font to start the geometry analysis.")
+    st.info("Upload a font to begin.")
