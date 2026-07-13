@@ -126,36 +126,38 @@ def get_optical_class(glyph_name):
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    # The physical "force field" that prevents overlap regardless of character shape
-    PHYSICAL_MIN_GAP = 10 
+    # The only rule: No two shapes can be closer than this at any point
+    GLOBAL_MIN_CLEARANCE = 10 
     
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
             prof_l = profiles[left]["right"]
             prof_r = profiles[right]["left"]
+            
+            # Find vertical slices where both shapes exist
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            # 1. Start with the target gap as the baseline for all pairs
-            # This ensures no "exceptions" are forced into the math
-            base_dist = target_gap
+            # 1. Start with the target gap
+            kern_val = target_gap
             
-            # 2. Find the minimum distance between the two shapes
+            # 2. Check for the absolute narrowest point between shapes
+            # If (RightEdge_LeftGlyph + Kern) - LeftEdge_RightGlyph < Gap, we shrink/expand
+            # We calculate distance at every single slice
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
             
-            # 3. Calculate initial kern
-            kern_val = int(base_dist - min_dist)
+            # The adjustment needed to hit the target
+            adjustment = target_gap - min_dist
             
-            # 4. Global Collision Sweep: 
-            # If ANY point on the two glyphs is closer than the limit, push them apart
+            # 3. Collision Sweep
+            # Ensure the adjustment doesn't violate the global minimum
             for y in common_ys:
-                current_gap = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
-                if current_gap < PHYSICAL_MIN_GAP:
-                    kern_val += (PHYSICAL_MIN_GAP - current_gap)
+                projected_gap = (prof_r[y] + profiles[left]["advance"] + adjustment) - prof_l[y]
+                if projected_gap < GLOBAL_MIN_CLEARANCE:
+                    adjustment += (GLOBAL_MIN_CLEARANCE - projected_gap)
             
-            # 5. Only record if there is a significant change
-            if abs(kern_val) > 2:
-                kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
+            if abs(adjustment) > 2:
+                kern_pairs[(left, right)] = int(round(adjustment / 5.0) * 5)
                         
     return kern_pairs
 
