@@ -8,7 +8,7 @@ from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
 # --- 0. BRANDING STRIPPER & TYPOGRAPHY ENFORCER ---
 st.set_page_config(page_title="LazyKern", layout="centered")
-inject_pro_cleaner() # <--- Must be right here
+def inject_pro_cleaner():
     st.markdown("""
     <style>
     /* Nuke all branding elements across all versions */
@@ -35,7 +35,6 @@ inject_pro_cleaner() # <--- Must be right here
     }
     </style>
     """, unsafe_allow_html=True)
-
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
