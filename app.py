@@ -141,10 +141,12 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             class_r = get_optical_class(right)
             
             # Dynamic spacing logic based on shape interaction
+            # This allows curves to nest closer, preventing the "too far" look
             if class_l == 'STRAIGHT' and class_r == 'STRAIGHT':
                 base_target = target_gap + 5
-            elif class_l == 'ROUND' or class_r == 'ROUND':
-                base_target = target_gap - 20 # Allows rounds to tuck in
+            elif class_l == 'ROUND' or class_r == 'ROUND' or class_l == 'DIAGONAL_OPEN' or class_r == 'DIAGONAL_OPEN':
+                # This logic creates the "nesting" effect for non-rectangular letters
+                base_target = target_gap - 15 
             else:
                 base_target = target_gap
             
@@ -161,59 +163,6 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
     
-    return kern_pairs
-            
-            # --- THE HARDLINE ANTI-OVERLAP SWEEP ---
-            max_adjacent_compensation = 0
-            for y in common_ys:
-                projected_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
-                if projected_space < ABS_SAFE_CLEARANCE:
-                    compensation = ABS_SAFE_CLEARANCE - projected_space
-                    if compensation > max_adjacent_compensation:
-                        max_adjacent_compensation = compensation
-            
-            if max_adjacent_compensation > 0:
-                kern_val += int(math.ceil(max_adjacent_compensation))
-
-            if abs(kern_val) > 2:
-                kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
-
-    # --- PHASE 2: LOOK-THROUGH TRIPLET SAFETY LAYER ---
-    trigger_shorts = []
-    for g, prof in profiles.items():
-        ys = prof["left"].keys()
-        if ys and max(ys) < 300:  
-            trigger_shorts.append(g)
-    trigger_shorts = list(set(trigger_shorts))
-
-    for L in profiles.keys():
-        for M in trigger_shorts:
-            for R in profiles.keys():
-                k_lm = kern_pairs.get((L, M), 0)
-                k_mr = kern_pairs.get((M, R), 0)
-                
-                common_ys_lr = set(profiles[L]["right"].keys()).intersection(set(profiles[R]["left"].keys()))
-                if not common_ys_lr: continue
-                
-                max_clash_compensation = 0
-                for y in common_ys_lr:
-                    prof_l_edge = profiles[L]["right"][y]
-                    prof_r_edge = profiles[R]["left"][y]
-                    adv_l = profiles[L]["advance"]
-                    adv_m = profiles[M]["advance"]
-                    
-                    space_between_lr = (adv_l + k_lm + adv_m + k_mr + prof_r_edge) - prof_l_edge
-                    
-                    if space_between_lr < ABS_SAFE_CLEARANCE:
-                        compensation = ABS_SAFE_CLEARANCE - space_between_lr
-                        if compensation > max_clash_compensation:
-                            max_clash_compensation = compensation
-                
-                if max_clash_compensation > 0:
-                    shift = int(math.ceil(max_clash_compensation / 2.0))
-                    kern_pairs[(L, M)] = kern_pairs.get((L, M), 0) + shift
-                    kern_pairs[(M, R)] = kern_pairs.get((M, R), 0) + shift
-                        
     return kern_pairs
 
 # --- 2. STREAMLIT RUNTIME ---
