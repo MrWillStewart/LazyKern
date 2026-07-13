@@ -1,4 +1,3 @@
 streamlit
 fonttools
 pandas
-skia-pathops
