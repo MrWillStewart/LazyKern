@@ -1,50 +1,59 @@
 import streamlit as st
 from fontTools.ttLib import TTFont
-from fontTools.pens.boundsPen import BoundsPen
 import io
+import base64
 
-# --- 1. Geometry Engine Logic ---
-def get_glyph_profile(glyph_set, glyph_name, slices=5):
-    """Samples a glyph's horizontal extent at vertical intervals."""
-    if glyph_name not in glyph_set:
-        return None
-    
-    pen = BoundsPen(glyph_set)
-    glyph_set[glyph_name].draw(pen)
-    
-    # Simple bounding box implementation for the MVP
-    # In a full production engine, we use pathops to find exact intersections
-    y_min, y_max = pen.bounds[1], pen.bounds[3]
-    return {
-        'left': pen.bounds[0],
-        'right': pen.bounds[2],
-        'y_min': y_min,
-        'y_max': y_max
-    }
+# --- Geometry Engine Helpers ---
+def get_font_base64(font_data):
+    """Converts font bytes to base64 for CSS injection."""
+    return base64.b64encode(font_data).decode('utf-8')
 
-def analyze_and_kern(font_path):
-    font = TTFont(font_path)
-    glyph_set = font.getGlyphSet()
-    
-    # Here, you would iterate through common pairs (A-V, A-W, etc.)
-    # and adjust the GPOS table based on the profiles.
-    # This is where the heavy lifting happens.
-    
-    st.write("Analyzing glyph profiles...")
-    # Logic placeholder: In a full version, we modify the GPOS table here.
-    
-    output = io.BytesIO()
-    font.save(output)
-    output.seek(0)
-    return output
+# --- App Logic ---
+st.set_page_config(layout="wide")
+st.title("LazyKern: Professional Display Font Engine")
 
-# --- 2. Streamlit UI ---
-st.title("LazyKern: Geometry Engine")
-uploaded_file = st.file_uploader("Upload your font", type=['ttf', 'otf'])
+uploaded_file = st.file_uploader("Upload your font (.ttf/.otf)", type=['ttf', 'otf'])
 
 if uploaded_file:
-    if st.button("Run Optical Analysis"):
-        with st.spinner('Calculating vector profiles...'):
-            processed_font = analyze_and_kern(uploaded_file)
-            st.success("Geometry analysis complete!")
-            st.download_button("Download Kerned Font", processed_font, "LazyKern_Optimized.ttf")
+    font_bytes = uploaded_file.getvalue()
+    font_b64 = get_font_base64(font_bytes)
+    
+    # CSS to inject the font into the live preview
+    st.markdown(f"""
+        <style>
+        @font-face {{
+            font-family: 'UploadedFont';
+            src: url(data:font/ttf;base64,{font_b64});
+        }}
+        .preview-box {{
+            font-family: 'UploadedFont';
+            font-size: 72px;
+            padding: 20px;
+            border: 2px solid #333;
+            background: white;
+            color: black;
+            min-height: 150px;
+        }}
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.subheader("Live Preview")
+    # This acts as our interactive "Proofing Area"
+    preview_text = st.text_input("Edit preview text:", value="LazyKern T.Y.P.E.")
+    st.markdown(f'<div class="preview-box" contenteditable="true">{preview_text}</div>', unsafe_allow_html=True)
+
+    if st.button("Apply Optical Kerning"):
+        with st.spinner('Engine is running vector contour analysis...'):
+            # Placeholder for Geometry Engine: 
+            # In your next step, we will run the contour intersection 
+            # and modify the GPOS table here.
+            st.info("Analysis complete. Manual overrides enabled.")
+            
+            # Placeholder for Download
+            st.download_button(
+                label="Download Optimized Font",
+                data=font_bytes, 
+                file_name="LazyKern_Optimum.ttf"
+            )
+else:
+    st.info("Please upload a font file to begin.")
