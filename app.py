@@ -42,7 +42,6 @@ class ProfilePen(BasePen):
             self.points.append((x, y))
 
 def get_optical_category(name):
-    # Explicit definition of categories including the "Culprits"
     n = name.lower()
     if n in ['t', 'y', 'p', 'v', 'w', 'a', 'f', 'k', 'z']: return 'DIAGONAL_OVERHANG'
     if n in ['h', 'n', 'm', 'u', 'i', 'l', 'd', 'b']: return 'STRAIGHT'
@@ -81,13 +80,12 @@ def calculate_kerning(profiles, target_gap):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            # Logic: Diagonal/Overhang vs Punctuation = Aggressive Tuck
             cat_l, cat_r = get_optical_category(left), get_optical_category(right)
             
             offset = 0
-            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION': offset = -40 # Tuck punctuation under
-            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG': offset = -15 # Slight adjustment
-            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT': offset = 10 # Breathing room
+            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION': offset = -40 
+            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG': offset = -15
+            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT': offset = 10
             elif cat_l == 'ROUND' and cat_r == 'ROUND': offset = -10
             
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
@@ -103,33 +101,35 @@ st.title("LazyKern Live")
 uploaded_file = st.file_uploader("Upload Font", type=["ttf", "otf"])
 
 if uploaded_file:
-    # Load Font
     font = TTFont(io.BytesIO(uploaded_file.read()))
     profiles = get_glyph_profiles(font)
     
-    # UI Controls
     use_kern = st.toggle("Apply Auto-Kerning", value=True)
     gap = st.slider("Target Gap", 10, 100, 60, 5)
     
-    # Process
     if use_kern:
         kern_pairs = calculate_kerning(profiles, gap)
         fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
         addOpenTypeFeaturesFromString(font, "\n".join(fea))
     
-    # Export
     out = io.BytesIO()
     font.save(out)
     font_data = out.getvalue()
-    
-    # Preview
     b64 = base64.b64encode(font_data).decode('utf-8')
+    
+    # CSS injection to force the font into the text_area
     st.markdown(f"""
         <style>
         @font-face {{ font-family: 'LiveFont'; src: url('data:font/ttf;base64,{b64}'); }}
-        .tester {{ font-family: 'LiveFont'; font-size: 40px; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }}
+        .stTextArea textarea {{
+            font-family: 'LiveFont', sans-serif !important;
+            font-size: 48px !important;
+            line-height: 1.2 !important;
+            height: 200px !important;
+        }}
         </style>
-        <div class="tester">T. Y. P. V. A. O. H. | T Y P V A</div>
     """, unsafe_allow_html=True)
+    
+    st.text_area("Test your kerning here:", value="T. Y. P. V. A. O. H. | T Y P V A", key="tester")
     
     st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
