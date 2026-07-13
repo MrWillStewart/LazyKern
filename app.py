@@ -107,19 +107,16 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=40):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: 
                 continue
-            # Distance formula taking glyph advance into account
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
             kern_val = int(target_gap - min_dist)
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
     return kern_pairs
 
-# --- 2. STREAMLIT INTERFACE ---
+# --- 2. BACKEND PROCESS PROCESSING LAYOUT ---
 st.set_page_config(page_title="LazyKern", layout="centered")
 
 st.title("LazyKern ✒️")
-st.write("A clean, dynamic font auto-kerning utility tool.")
-
 uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 
 if uploaded_file:
@@ -127,39 +124,230 @@ if uploaded_file:
     
     if st.button("Analyze & Process Font"):
         with st.spinner("Executing geometric matrix scan..."):
-            # 1. Load data
             font = TTFont(io.BytesIO(uploaded_file.read()))
-            
-            # 2. Extract telemetry
             stats = analyze_character_set(font)
             profiles = get_glyph_profiles(font)
             
-            # 3. Generate kerning pairs
             glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
             pairs_to_kern = [(a, b) for a in glyphs for b in glyphs]
             kern_pairs = calculate_kerning(profiles, pairs_to_kern, target_gap=gap)
             
-            # 4. Inject GPOS table
             fea_lines = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
             addOpenTypeFeaturesFromString(font, "\n".join(fea_lines))
             
-            # 5. Output file compilation
             out = io.BytesIO()
             font.save(out)
             
-            # 6. Display visual completion card
             st.success("Analysis Complete!")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric(label="Font Style Profile", value=stats["type"])
-                st.metric(label="Total Scanned Characters", value=stats["total"])
-            with col2:
-                st.metric(label="Generated Kern Pairs", value=len(kern_pairs))
-                st.metric(label="Glyph Node Count", value=sum(p["nodes_count"] for p in profiles.values()))
-                
             st.download_button(
                 label="📥 Download Kerned Font File", 
                 data=out.getvalue(), 
                 file_name=f"kerned_{uploaded_file.name}"
             )
+
+# --- 3. FRONTEND PREVIEW COMPONENT ---
+st.write("---")
+st.subheader("Live Interactive Type Tester")
+
+# Insert your full code design string right here
+design_html = """
+<style>
+  /* Base Container - Defined as a style container context */
+  .type-tester-container {
+    --tester-font: sans-serif;
+    background-color: #ffffff;
+    border: 1px solid #dae1e8;
+    border-radius: 10px;
+    margin: 0;
+    width: 100%;
+    min-width: 0; 
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: 'Departuremono', monospace !important;
+    -webkit-tap-highlight-color: transparent;
+    container-type: inline-size;
+  }
+
+  .tester-header {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    border-bottom: 1px solid #dae1e8;
+    width: 100%;
+    height: 60px;
+    position: relative;
+  }
+  
+  .slider-wrapper {
+    flex-grow: 1;
+    max-width: 400px;
+    display: flex;
+    align-items: center;
+    padding: 0;
+    gap: 0px;
+    height: 100%;
+  }
+
+  .adjust-btn {
+    width: 60px;
+    height: 60px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: #4c5b6b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    flex-shrink: 0;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  
+  @media (hover: hover) {
+    .adjust-btn:hover { background-color: #fcfcfc; color: #000000; }
+  }
+  .adjust-btn:active { background-color: #f0f0f0; }
+
+  .divider {
+    width: 1px !important;
+    background-color: #dae1e8;
+    align-self: stretch;
+    flex-shrink: 0;
+  }
+
+  .size-readout {
+    font-family: 'Departuremono', monospace !important;
+    font-size: 13px !important;
+    line-height: 20px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-left: 1px solid #dae1e8;
+    width: 75px; 
+    flex-shrink: 0;
+    color: #4c5b6b;
+    white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .style-switcher {
+    display: flex;
+    margin-left: auto;
+    align-self: stretch;
+    border-left: 1px solid #dae1e8;
+    position: relative;
+  }
+
+  .style-btn {
+    font-family: 'Departuremono', monospace !important;
+    font-size: 13px !important;
+    line-height: 20px !important;
+    background: #ffffff;
+    border: none;
+    padding: 11px 30px;
+    color: #4c5b6b;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+    height: 100%;
+    outline: none;
+  }
+
+  .style-btn:hover { background-color: #fafafb; }
+  .style-btn.active { text-decoration: underline; text-underline-offset: 6px; }
+
+  .sizeSlider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 60px; 
+    background: transparent;
+    margin: 0;
+    padding: 0 20px;
+    cursor: pointer;
+  }
+  
+  .sizeSlider::-webkit-slider-runnable-track { width: 100%; height: 1px; background-color: #dae1e8; }
+  .sizeSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 60px; 
+    width: 40px;  
+    background-color: transparent !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='20'%3E%3Crect width='10' height='20' rx='2' fill='%23000000'/%3E%3C/svg%3E");
+    background-position: center;
+    background-repeat: no-repeat;
+    margin-top: -29.5px; 
+  }
+
+  .tester-body { padding: 20px 0; width: 100%; box-sizing: border-box; }
+  .live-type-editor {
+    font-family: var(--tester-font) !important;
+    line-height: 1.2;        
+    color: #000000;
+    outline: none;
+    border: none;
+    padding: 0 30px;
+    width: 100%;
+    white-space: nowrap;
+    overflow-x: auto;
+  }
+</style>
+
+<div class="type-tester-container" 
+     style="--tester-font: sans-serif" 
+     data-glyphs="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?#/-' $€£%" 
+     data-start-size="60" data-min-size="20" data-max-size="150" data-start-text="Type Test Space">
+     
+  <div class="tester-header">
+    <div class="slider-wrapper">
+      <button class="adjust-btn prev">←</button>
+      <div class="divider"></div>
+      <input type="range" class="sizeSlider" step="1" />
+      <div class="divider"></div>
+      <button class="adjust-btn next">→</button>
+    </div>
+    <div class="size-readout"><span class="sizeValue">60pt</span></div>
+  </div>
+
+  <div class="tester-body">
+    <div contenteditable="true" spellcheck="false" class="liveEditor live-type-editor">Type Test Space</div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const box = document.querySelector('.type-tester-container');
+    const slider = box.querySelector('.sizeSlider');
+    const readout = box.querySelector('.sizeValue');
+    const editor = box.querySelector('.liveEditor');
+    const btnPrev = box.querySelector('.prev');
+    const btnNext = box.querySelector('.next');
+
+    function updateDisplay() {
+        const size = slider.value + 'pt';
+        editor.style.fontSize = size;
+        if (readout) readout.textContent = size;
+    }
+
+    slider.min = box.getAttribute('data-min-size');
+    slider.max = box.getAttribute('data-max-size');
+    slider.value = box.getAttribute('data-start-size');
+    updateDisplay();
+
+    slider.addEventListener('input', updateDisplay);
+    btnPrev.addEventListener('click', () => { slider.value = Math.max(20, parseInt(slider.value)-5); updateDisplay(); });
+    btnNext.addEventListener('click', () => { slider.value = Math.min(150, parseInt(slider.value)+5); updateDisplay(); });
+  })();
+</script>
+"""
+
+import streamlit.components.v1 as components
+components.html(design_html, height=300)
