@@ -87,7 +87,7 @@ def get_optical_class(glyph_name):
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    ABS_SAFE_CLEARANCE = 20  # Minimum structural distance in font units
+    ABS_SAFE_CLEARANCE = 25  # Increased slightly for a safer typographic baseline buffer
 
     # --- PHASE 1: ADJACENT PAIR CALCULATION ---
     for left, right in pairs_to_kern:
@@ -128,11 +128,11 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
 
     # --- PHASE 2: LOOK-THROUGH TRIPLET SAFETY LAYER ---
-    # Scans across low profile barriers (periods, spaces) to prevent secondary letter collisions
-    trigger_shorts = ['space']
+    # Only collects baseline characters that explicitly contain physical vector geometries
+    trigger_shorts = []
     for g, prof in profiles.items():
         ys = prof["left"].keys()
-        if ys and max(ys) < 300:  # Any glyph that sits purely on the bottom baseline
+        if ys and max(ys) < 300:  # Any glyph that sits cleanly underneath cap height zone
             trigger_shorts.append(g)
     trigger_shorts = list(set(trigger_shorts))
 
@@ -142,7 +142,7 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
                 k_lm = kern_pairs.get((L, M), 0)
                 k_mr = kern_pairs.get((M, R), 0)
                 
-                # Check where outer envelopes exist simultaneously (e.g. cap height)
+                # Check where outer layout boundaries overlap at high y levels (e.g. T crossbars)
                 common_ys_lr = set(profiles[L]["right"].keys()).intersection(set(profiles[R]["left"].keys()))
                 if not common_ys_lr: continue
                 
@@ -153,7 +153,7 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
                     adv_l = profiles[L]["advance"]
                     adv_m = profiles[M]["advance"]
                     
-                    # Total spatial depth across the middle boundary channel
+                    # Total physical width space layout calculated between outer bounds
                     space_between_lr = (adv_l + k_lm + adv_m + k_mr + prof_r_edge) - prof_l_edge
                     
                     if space_between_lr < ABS_SAFE_CLEARANCE:
@@ -162,12 +162,10 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
                             max_clash_compensation = compensation
                 
                 if max_clash_compensation > 0:
-                    # Dynamically re-balance and push both channels open evenly
+                    # Relieve layout strain evenly out from center pivot element
                     shift = int(math.ceil(max_clash_compensation / 2.0))
-                    if (L, M) in kern_pairs or k_lm != 0:
-                        kern_pairs[(L, M)] = kern_pairs.get((L, M), 0) + shift
-                    if (M, R) in kern_pairs or k_mr != 0:
-                        kern_pairs[(M, R)] = kern_pairs.get((M, R), 0) + shift
+                    kern_pairs[(L, M)] = kern_pairs.get((L, M), 0) + shift
+                    kern_pairs[(M, R)] = kern_pairs.get((M, R), 0) + shift
                         
     return kern_pairs
 
