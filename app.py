@@ -6,6 +6,26 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
+# --- 0. BRANDING STRIPPER & TYPOGRAPHY ENFORCER ---
+def inject_pro_cleaner():
+    st.markdown("""
+    <style>
+    /* Hide top header bar, footer, and main menu */
+    [data-testid="stHeader"] { display: none !important; }
+    footer { visibility: hidden !important; }
+    #MainMenu { visibility: hidden !important; }
+    
+    /* Remove the link/anchor icons next to all titles */
+    .header-anchor { display: none !important; }
+    h1 a, h2 a, h3 a, h4 a { display: none !important; }
+    
+    /* Enforce Design System Typography */
+    h1, h2, h3, h4, label, .stMarkdown p {
+        font-family: 'Departure Mono', monospace !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
@@ -57,7 +77,7 @@ def get_glyph_profiles(font, step_size=10):
         profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph.width}
     return profiles
 
-def calculate_kerning(profiles, pairs_to_kern, target_gap=40):
+def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
@@ -73,22 +93,48 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=40):
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
     return kern_pairs
 
-# --- 2. BARE-BONES APP LOGIC ---
+# --- 2. STREAMLIT RUNTIME ---
 st.set_page_config(page_title="LazyKern", layout="centered")
+inject_pro_cleaner()
 
-st.title("LazyKern ✒️")
+st.title("LazyKern")
 uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 
 if uploaded_file:
-    # State Management
-    if "font_bytes" not in st.session_state or st.session_state.get("filename") != uploaded_file.name:
-        st.session_state.font_bytes = uploaded_file.read()
-        st.session_state.original_bytes = st.session_state.font_bytes
-        st.session_state.filename = uploaded_file.name
-        st.session_state.is_kerned = False
+    # High-Performance Memory Caching Layer
+    if "filename" not in st.session_state or st.session_state.filename != uploaded_file.name:
+        with st.spinner("Analyzing font geometry profiles..."):
+            font_bytes = uploaded_file.read()
+            st.session_state.original_bytes = font_bytes
+            st.session_state.filename = uploaded_file.name
+            
+            # Map structural coordinates once to allow real-time adjustments later
+            font = TTFont(io.BytesIO(font_bytes))
+            st.session_state.profiles = get_glyph_profiles(font)
+            glyphs = [g for g in st.session_state.profiles.keys() if g not in [".notdef", "space"]]
+            st.session_state.pairs = [(a, b) for a in glyphs for b in glyphs]
 
-    # Font Injector for Live Preview
-    b64_font = base64.b64encode(st.session_state.font_bytes).decode('utf-8')
+    # Dynamic Control Mechanics
+    gap = st.slider("Target Gap (Tightness)", min_value=10, max_value=100, value=60, step=5)
+    use_kerning = st.toggle("Apply Auto-Kerning", value=True)
+    
+    # Real-Time Kerning Matrix Calculation Pipeline
+    if use_kerning and "profiles" in st.session_state:
+        font = TTFont(io.BytesIO(st.session_state.original_bytes))
+        kern_pairs = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap=gap)
+        
+        if kern_pairs:
+            fea_lines = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
+            addOpenTypeFeaturesFromString(font, "\n".join(fea_lines))
+        
+        out = io.BytesIO()
+        font.save(out)
+        active_font_bytes = out.getvalue()
+    else:
+        active_font_bytes = st.session_state.original_bytes
+
+    # Inline Live Font Delivery via Sandbox Data-URI Matrix
+    b64_font = base64.b64encode(active_font_bytes).decode('utf-8')
     font_fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
     
     st.markdown(f"""
@@ -101,46 +147,25 @@ if uploaded_file:
                 font-family: 'LiveFont', sans-serif !important;
                 font-size: 48px;
                 width: 100%;
-                min-height: 120px;
+                min-height: 140px;
                 padding: 15px;
+                margin-top: 10px;
                 margin-bottom: 20px;
-                border: 1px solid #ddd;
-                border-radius: 8px;
+                border: 1px solid #DAE1E8;
+                border-radius: 10px;
+                color: #000000;
                 line-height: 1.2;
+                resize: vertical;
             }}
         </style>
     """, unsafe_allow_html=True)
 
     st.subheader("Live Preview")
-    status = "Kerned" if st.session_state.is_kerned else "Original (Unkerned)"
-    st.write(f"Currently viewing: **{status}**")
-    
-    st.markdown('<textarea class="tester-box">AV TA To Tr We Wa P. Y- Type here...</textarea>', unsafe_allow_html=True)
+    st.markdown('<textarea class="tester-box">AVAW YOU TEST.</textarea>', unsafe_allow_html=True)
 
-    st.subheader("Kerning Controls")
-    gap = st.slider("Target Gap (Tightness)", min_value=10, max_value=100, value=40, step=5)
-    
-    if st.button("Apply Auto-Kerning"):
-        with st.spinner("Processing geometries..."):
-            font = TTFont(io.BytesIO(st.session_state.original_bytes))
-            profiles = get_glyph_profiles(font)
-            glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
-            pairs = [(a, b) for a in glyphs for b in glyphs]
-            
-            kern_pairs = calculate_kerning(profiles, pairs, target_gap=gap)
-            
-            fea_lines = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
-            addOpenTypeFeaturesFromString(font, "\n".join(fea_lines))
-            
-            out = io.BytesIO()
-            font.save(out)
-            st.session_state.font_bytes = out.getvalue()
-            st.session_state.is_kerned = True
-            st.rerun()
-
-    if st.session_state.is_kerned:
-        st.download_button(
-            label="📥 Download Kerned Font", 
-            data=st.session_state.font_bytes, 
-            file_name=f"kerned_{uploaded_file.name}"
-        )
+    # Contextual Asset Delivery
+    st.download_button(
+        label="📥 Download Kerned Font File", 
+        data=active_font_bytes, 
+        file_name=f"kerned_{uploaded_file.name}"
+    )
