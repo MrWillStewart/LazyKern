@@ -126,9 +126,9 @@ def get_optical_class(glyph_name):
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    PHYSICAL_MIN_GAP = 15 
+    PHYSICAL_MIN_GAP = 10 # The absolute force-field limit
     
-    # 1. Base Intelligent Spacing & Collision Enforcement
+    # PASS 1: Calculate basic optical spacing
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
             prof_l = profiles[left]["right"]
@@ -136,19 +136,14 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            class_l = get_optical_class(left)
-            class_r = get_optical_class(right)
-            
-            if class_l == 'STRAIGHT' and class_r == 'STRAIGHT':
-                base_target = target_gap + 5
-            elif class_l == 'ROUND' or class_r == 'ROUND' or class_l == 'DIAGONAL_OPEN' or class_r == 'DIAGONAL_OPEN':
-                base_target = target_gap - 15 
-            else:
-                base_target = target_gap
+            # Use a slightly more aggressive base gap for better flow
+            base_target = target_gap
             
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
             kern_val = int(base_target - min_dist)
             
+            # PASS 2: Universal Collision Solver
+            # This loops through every single Y-slice to ensure NO overlap occurs
             for y in common_ys:
                 current_gap = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
                 if current_gap < PHYSICAL_MIN_GAP:
@@ -156,19 +151,6 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
-
-    # 2. Triplet Safety Sweep
-    # This prevents collisions in patterns like T.Y where punctuation is ignored
-    # by the primary pairing logic, but physical overhangs still collide.
-    for (left, mid), val in list(kern_pairs.items()):
-        if mid in ['period', 'comma', 'hyphen']:
-            for right in profiles.keys():
-                if (mid, right) in kern_pairs:
-                    # If Left and Right are both wide diagonals, force them further apart
-                    if get_optical_class(left) == 'DIAGONAL_OPEN' and get_optical_class(right) == 'DIAGONAL_OPEN':
-                        # Add a 10-unit buffer to ensure they don't clip
-                        kern_pairs[(left, mid)] += 5
-                        kern_pairs[(mid, right)] += 5
                         
     return kern_pairs
 
