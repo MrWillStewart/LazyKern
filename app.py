@@ -7,34 +7,35 @@ from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
 # --- 0. BRANDING STRIPPER & TYPOGRAPHY ENFORCER ---
-st.set_page_config(page_title="LazyKern", layout="centered")
 def inject_pro_cleaner():
     st.markdown("""
     <style>
-    /* Nuke all branding elements across all versions */
-    header, footer, #MainMenu, 
-    [data-testid="stHeader"], 
-    [data-testid="stBottom"], 
+    /* Nuke the 'Built with Streamlit' footer */
     [data-testid="stAppFooter"], 
-    div.stDeployButton,
-    .st-emotion-cache-1rqvspb,
-    button[title="View fullscreen"] {
-        display: none !important;
-        visibility: hidden !important;
+    footer { 
+        display: none !important; 
     }
     
-    /* Ensure nothing can peek through */
-    iframe { display: none !important; }
+    /* Nuke the fullscreen button at bottom right */
+    [data-testid="StyledFullScreenButton"], 
+    button[title="View fullscreen"],
+    .st-emotion-cache-1rqvspb { 
+        display: none !important; 
+    }
+
+    /* Nuke the top-right menu */
+    #MainMenu, 
+    [data-testid="stHeader"] { 
+        display: none !important; 
+    }
     
-    /* Clean up headers */
-    .header-anchor { display: none !important; }
-    
-    /* Force typography */
-    h1, h2, h3, h4, label, .stMarkdown p {
-        font-family: sans-serif !important;
+    /* Prevent the footer container from taking up layout space */
+    div[data-testid="stBottom"] {
+        display: none !important;
     }
     </style>
     """, unsafe_allow_html=True)
+    
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
