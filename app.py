@@ -10,26 +10,27 @@ from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 def inject_pro_cleaner():
     st.markdown("""
     <style>
-    /* Hide Top Header & Hamburger Menu */
-    [data-testid="stHeader"] { display: none !important; }
-    #MainMenu { display: none !important; }
+    /* Nuke all branding elements across all versions */
+    header, footer, #MainMenu, 
+    [data-testid="stHeader"], 
+    [data-testid="stBottom"], 
+    [data-testid="stAppFooter"], 
+    div.stDeployButton,
+    .st-emotion-cache-1rqvspb,
+    button[title="View fullscreen"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
     
-    /* Hide 'Built with Streamlit' Footers */
-    footer { display: none !important; }
-    [data-testid="stBottom"] { display: none !important; }
-    [data-testid="stAppFooter"] { display: none !important; }
+    /* Ensure nothing can peek through */
+    iframe { display: none !important; }
     
-    /* Hide Full-Screen Toggles on Hover */
-    button[title="View fullscreen"] { display: none !important; }
-    [data-testid="StyledFullScreenButton"] { display: none !important; }
-
-    /* Hide Link Anchors on Headers */
+    /* Clean up headers */
     .header-anchor { display: none !important; }
-    h1 a, h2 a, h3 a, h4 a { display: none !important; }
     
-    /* Force Custom Typography */
+    /* Force typography */
     h1, h2, h3, h4, label, .stMarkdown p {
-        font-family: 'Departure Mono', monospace !important;
+        font-family: sans-serif !important;
     }
     </style>
     """, unsafe_allow_html=True)
