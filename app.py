@@ -71,7 +71,7 @@ def get_glyph_profiles(font):
 
 def calculate_kerning(profiles, target_gap):
     kern_pairs = {}
-    ABS_SAFE_CLEARANCE = 30 # The "Hardline" - never let glyphs get closer than this
+    ABS_SAFE_CLEARANCE = 35 # Increased slightly to open up the collision zones
     keys = list(profiles.keys())
     
     for left in keys:
@@ -83,10 +83,10 @@ def calculate_kerning(profiles, target_gap):
             
             cat_l, cat_r = get_optical_category(left), get_optical_category(right)
             
-            # 1. OPTICAL TUCKING LOGIC
+            # 1. OPTICAL TUCKING LOGIC (Softened from -50 to -35)
             offset = 0
             if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION':
-                offset = -30 # Aggressive tuck
+                offset = -35 
             elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG':
                 offset = -10
             elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT':
@@ -94,14 +94,11 @@ def calculate_kerning(profiles, target_gap):
             elif cat_l == 'ROUND' and cat_r == 'ROUND':
                 offset = -10
             
-            # 2. SAFETY LAYER (The Fix)
-            # Calculate base distance
+            # 2. SAFETY LAYER
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
-            
-            # Proposed kerning
             kern_val = int((target_gap + offset) - min_dist)
             
-            # Enforce Hardline: If the resulting space is less than the clearance, push back
+            # Enforce Hardline
             for y in common_ys:
                 projected_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
                 if projected_space < ABS_SAFE_CLEARANCE:
