@@ -9,38 +9,24 @@ from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
 class ProfilePen(BasePen):
-    """Path-flattening vector scanning engine."""
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
         self.points = []
     def _moveTo(self, p): self.points.append(p)
-    def _lineTo(self, p1):
-        p0 = self._getCurrentPoint()
-        if p0 is None: {self.points.append(p1)}; return
-        dist = math.hypot(p1[0]-p0[0], p1[1]-p0[1])
-        steps = max(1, int(dist / 2))
-        for i in range(steps + 1):
-            t = i / steps
-            self.points.append((p0[0]+t*(p1[0]-p0[0]), p0[1]+t*(p1[1]-p0[1])))
+    def _lineTo(self, p): self.points.append(p)
     def _curveToOne(self, p1, p2, p3):
         p0 = self._getCurrentPoint()
-        if p0 is None: {self.points.append(p3)}; return
-        dist = math.hypot(p1[0]-p0[0], p1[1]-p0[1]) + math.hypot(p2[0]-p1[0], p2[1]-p1[1]) + math.hypot(p3[0]-p2[0], p3[1]-p2[1])
-        steps = max(4, int(dist / 2))
-        for i in range(steps + 1):
-            t = i / steps
-            x = (1-t)**3*p0[0] + 3*(1-t)**2*t*p1[0] + 3*(1-t)*t**2*p2[0] + t**3*p3[0]
-            y = (1-t)**3*p0[1] + 3*(1-t)**2*t*p1[1] + 3*(1-t)*t**2*p2[1] + t**3*p3[1]
+        for i in range(1, 6):
+            t = i / 5.0
+            x = (1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]
+            y = (1-t)**3 * p0[1] + 3*(1-t)**2 * t * p1[1] + 3*(1-t) * t**2 * p2[1] + t**3 * p3[1]
             self.points.append((x, y))
     def _qCurveToOne(self, p1, p2):
         p0 = self._getCurrentPoint()
-        if p0 is None: {self.points.append(p2)}; return
-        dist = math.hypot(p1[0]-p0[0], p1[1]-p0[1]) + math.hypot(p2[0]-p1[0], p2[1]-p1[1])
-        steps = max(4, int(dist / 2))
-        for i in range(steps + 1):
-            t = i / steps
-            x = (1-t)**2*p0[0] + 2*(1-t)*t*p1[0] + t**2*p2[0]
-            y = (1-t)**2*p0[1] + 2*(1-t)*t*p1[1] + t**2*p2[1]
+        for i in range(1, 4):
+            t = i / 3.0
+            x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
+            y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
             self.points.append((x, y))
 
 def get_glyph_profiles(font, step_size=10):
@@ -60,7 +46,12 @@ def get_glyph_profiles(font, step_size=10):
         for y_slice, x_vals in slices.items():
             left_profile[y_slice] = min(x_vals)
             right_profile[y_slice] = max(x_vals)
-        profiles[glyph_name] = {"left": left_profile, "right": right_profile, "advance": glyph.width, "nodes_count": len(pen.points)}
+        profiles[glyph_name] = {
+            "left": left_profile, 
+            "right": right_profile, 
+            "advance": glyph.width,
+            "nodes_count": len(pen.points)
+        }
     return profiles
 
 def analyze_character_set(font):
@@ -82,88 +73,47 @@ def analyze_character_set(font):
     return {"type": font_type, "caps": caps, "lower": lower, "digits": digits, "punct": punct}
 
 def generate_intelligence_report(font, profiles):
+    """Performs deep analysis of structural geometry to recommend kerning baselines."""
     upm = font['head'].unitsPerEm if 'head' in font else 1000
+    
+    # Calculate averages
     total_width = sum(p['advance'] for p in profiles.values())
     avg_width = total_width / len(profiles) if profiles else 500
     total_nodes = sum(p['nodes_count'] for p in profiles.values())
     avg_nodes = total_nodes / len(profiles) if profiles else 10
+    
     width_ratio = avg_width / upm
     
+    # 1. Evaluate Width Characteristics
     if width_ratio < 0.45:
-        width_style, rec_gap = "Highly Condensed / Narrow", 30
+        width_style = "Highly Condensed / Narrow"
+        rec_gap = 35
     elif width_ratio > 0.68:
-        width_style, rec_gap = "Expanded / Wide Extended", 65
+        width_style = "Expanded / Wide Extended"
+        rec_gap = 65
     else:
-        width_style, rec_gap = "Regular Proportion", 50
+        width_style = "Regular Proportion"
+        rec_gap = 50
         
-    if avg_nodes > 150: complexity_style, rec_buffer = "Organic / Complex", 35
-    elif avg_nodes < 40: complexity_style, rec_buffer = "Minimalist / Geometric", 15
-    else: complexity_style, rec_buffer = "Standard Vector Curves", 20
+    # 2. Evaluate Vector Complexity
+    if avg_nodes > 35:
+        complexity_style = "Organic / Complex (High Node Count)"
+        rec_buffer = 35
+    elif avg_nodes < 12:
+        complexity_style = "Minimalist / Geometric (Low Node Count)"
+        rec_buffer = 15
+    else:
+        complexity_style = "Standard Vector Curves"
+        rec_buffer = 20
         
-    return {"width_style": width_style, "complexity_style": complexity_style, "rec_gap": rec_gap, "rec_buffer": rec_buffer, "avg_width": int(avg_width), "avg_nodes": int(avg_nodes)}
-
-def execute_typographer_audit(kern_pairs):
-    """Simulates a master typographer scrutinizing the kerning tables against core optical laws."""
-    audit_log = []
-    
-    # 1. Optical Rhythm Groupings
-    straights = ['H', 'I', 'N', 'M', 'U']
-    rounds = ['O', 'C', 'Q', 'G', 'D']
-    diagonals = ['A', 'V', 'W', 'Y']
-    
-    # Extract values for benchmarking
-    hh_val = next((v for (l, r), v in kern_pairs.items() if l in straights and r in straights), 0)
-    oo_val = next((v for (l, r), v in kern_pairs.items() if l in rounds and r in rounds), None)
-    
-    # Test 1: Round-to-Round vs Straight-to-Straight Rhythm
-    if oo_val is not None:
-        if oo_val >= hh_val:
-            audit_log.append({
-                "test": "Optical Curve Contrast Rhythm",
-                "status": "❌ FAILED",
-                "color": "red",
-                "critique": f"Round combinations like O-O ({oo_val}) are breathing too loose relative to Straights ({hh_val}). This disrupts rhythmic gray-value texture. Drop your Target Optical Gap or tighten curves."
-            })
-        else:
-            audit_log.append({
-                "test": "Optical Curve Contrast Rhythm",
-                "status": "✅ PASSED",
-                "color": "green",
-                "critique": f"Rounds are tighter than straights (O-O: {oo_val} vs H-H: {hh_val}). Excellent geometric optical compensation."
-            })
-    else:
-        audit_log.append({"test": "Optical Curve Contrast Rhythm", "status": "⚠️ INCOMPLETE", "color": "orange", "critique": "Anchor profiles missing from character set to complete contrast benchmark calculations."})
-
-    # Test 2: Extreme Diagonal Clearance Check
-    diag_samples = [('A','V'), ('V','A'), ('W','A'), ('Y','A')]
-    found_diags = {f"{l}-{r}": v for (l, r), v in kern_pairs.items() if (l, r) in diag_samples}
-    
-    if found_diags:
-        worst_crash = [k for k, v in found_diags.items() if v < -180]
-        worst_gap = [k for k, v in found_diags.items() if v >= 0]
-        if worst_crash:
-            audit_log.append({"test": "Diagonal Collision Prevention", "status": "❌ CRISIS", "color": "red", "critique": f"Diagonals {', '.join(worst_crash)} are over-compensating ({found_diags[worst_crash[0]]}). Paths risk overlapping. Up your Trap Protection Buffer."})
-        elif worst_gap:
-            audit_log.append({"test": "Diagonal Collision Prevention", "status": "⚠️ WARNING", "color": "orange", "critique": f"Diagonals {', '.join(worst_gap)} have zero negative adjustment. This will leave massive geometric space holes in headers."})
-        else:
-            audit_log.append({"test": "Diagonal Collision Prevention", "status": "✅ PASSED", "color": "green", "critique": "Diagonals display healthy negative intersections without causing shape suffocation."})
-    else:
-         audit_log.append({"test": "Diagonal Collision Prevention", "status": "⚠️ UNTESTED", "color": "grey", "critique": "No core uppercase diagonal character sequences mapped."})
-
-    # Test 3: The Hanging Canopy Tuck Pass
-    canopy_samples = [('T','o'), ('F','a'), ('P','e'), ('T','period'), ('V','comma'), ('Y','period')]
-    found_canopies = {f"{l}{r}": v for (l, r), v in kern_pairs.items() if (l, r) in canopy_samples or (l == 'T' and r == '.') or (l == 'V' and r == ',')}
-    
-    if found_canopies:
-        loose_canopies = [k for k, v in found_canopies.items() if v > -15]
-        if loose_canopies:
-            audit_log.append({"test": "Hanging Canopy Adjustments", "status": "⚠️ WARNING", "color": "orange", "critique": f"Combinations under sheltering stems ({', '.join(loose_canopies)}) are too loose. Bring lowercase and punctuation closer into the letter's shadow."})
-        else:
-            audit_log.append({"test": "Hanging Canopy Adjustments", "status": "✅ PASSED", "color": "green", "critique": f"Punctuation and lowercase rounds are successfully tucked into crossbar shelters."})
-    else:
-        audit_log.append({"test": "Hanging Canopy Adjustments", "status": "ℹ️ INFO", "color": "blue", "critique": "Mixed-case or punctuation profiles not present in font block to trigger canopy analysis."})
-
-    return audit_log
+    return {
+        "width_style": width_style,
+        "complexity_style": complexity_style,
+        "rec_gap": rec_gap,
+        "rec_buffer": rec_buffer,
+        "avg_width": int(avg_width),
+        "avg_nodes": int(avg_nodes)
+    }
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=40, max_adjustment=150, step_size=10, trap_buffer=20):
     kerning_table = {}
@@ -204,7 +154,8 @@ st.set_page_config(page_title="Autokern Studio Pro", page_icon="✒️", layout=
 st.title("✒️ Autokern Studio Pro")
 st.write("Professional Font Engineering Environment featuring Automated Typographic DNA Calibration.")
 
-st.sidebar.header("🛞 Engine Calibration")
+# Sidebar Configuration Controls
+st.sidebar.header("🛞 Manual Calibration Override")
 target_gap = st.sidebar.slider("Target Optical Gap", min_value=10, max_value=120, value=50, step=5)
 precision = st.sidebar.slider("Scanner Precision Slices", min_value=2, max_value=25, value=10, step=1)
 trap_buffer = st.sidebar.slider("Trap Protection Buffer", min_value=0, max_value=60, value=20, step=5)
@@ -220,6 +171,8 @@ if uploaded_file is not None:
         font = TTFont(io.BytesIO(file_bytes))
         charset_analysis = analyze_character_set(font)
         profiles = get_glyph_profiles(font, step_size=precision)
+        
+        # --- NEW Feature: Automated Metrics Analysis Report ---
         intel_report = generate_intelligence_report(font, profiles)
         
         glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
@@ -227,7 +180,6 @@ if uploaded_file is not None:
         
         kern_pairs = calculate_kerning(profiles, pairs_to_test, target_gap=target_gap, step_size=precision, trap_buffer=trap_buffer)
         
-        # Inject feature code
         if kern_pairs:
             fea_lines = ["feature kern {"]
             for (left, right), val in kern_pairs.items():
@@ -249,59 +201,68 @@ if uploaded_file is not None:
             .preview-display {{ font-family: 'LiveAutokernFont' !important; white-space: pre; background: #111; color: #fff; padding: 15px; border-radius: 6px; }}
             .size-lg {{ font-size: 64px !important; line-height: 1.1; }}
             .size-md {{ font-size: 36px !important; line-height: 1.2; }}
+            .size-sm {{ font-size: 18px !important; line-height: 1.4; }}
             </style>
         """, unsafe_allow_html=True)
         
-        # Tab Matrix
-        main_tab, audit_tab, preview_tab = st.tabs(["🎛️ Compilation Dashboard", "🧠 Typographer Extraordinaire Diagnostics", "🔍 Contextual Sandboxes"])
+        # UI Columns
+        col1, col2 = st.columns([1, 2])
         
-        with main_tab:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("📦 Build Actions")
-                st.success(f"Generated {len(kern_pairs)} unique GPOS lookup pairs.")
-                st.download_button(label="📥 Download Compiled Binary", data=output_buffer.getvalue(), file_name=f"{base_name}-Autokerned{ext}", mime=font_mime, use_container_width=True)
-                
-                st.subheader("🧬 Automated Calibration Suggestions")
-                st.info(f"**Structural Archetype:** {intel_report['width_style']}")
-                st.warning(f"💡 Recommended configuration: Target Optical Gap: `{intel_report['rec_gap']}` | Trap Buffer: `{intel_report['rec_buffer']}`")
+        with col1:
+            st.subheader("📦 Build Actions")
+            st.success(f"Generated {len(kern_pairs)} unique rules.")
+            st.download_button(
+                label="📥 Download Compiled Binary",
+                data=output_buffer.getvalue(),
+                file_name=f"{base_name}-Autokerned{ext}",
+                mime=font_mime,
+                use_container_width=True
+            )
             
-            with col2:
-                st.subheader("🧬 Character Map Fingerprint")
-                m_col1, m_col2 = st.columns(2)
-                with m_col1:
-                    st.metric(label="A-Z Uppercase", value=charset_analysis['caps'])
-                    st.metric(label="0-9 Numbers", value=charset_analysis['digits'])
-                with m_col2:
-                    st.metric(label="a-z Lowercase", value=charset_analysis['lower'])
-                    st.metric(label="Punctuation/Symbols", value=charset_analysis['punct'])
-                    
-        with audit_tab:
-            st.subheader("🕵️‍♂️ Real-Time Expert Witness Critique")
-            st.write("Below are evaluations generated by running checks based on classical font foundry standards against your current slider parameters.")
+            # Interactive Metrics Intelligence Dashboard card display
+            st.subheader("🧠 Typographic Intelligence Report")
+            st.markdown(f"""
+            * **Visual Architecture:** `{intel_report['width_style']}` (Avg Advance Width: `{intel_report['avg_width']}` units)
+            * **Vector Topology:** `{intel_report['complexity_style']}` (Avg `{intel_report['avg_nodes']}` control nodes per glyph)
+            """)
             
-            typographer_critiques = execute_typographer_audit(kern_pairs)
-            for check in typographer_critiques:
-                st.markdown(f"#### {check['test']} — <span style='color:{check['color']};'>{check['status']}</span>", unsafe_allow_html=True)
-                st.info(check['critique'])
-                
-            st.subheader("📊 Raw GPOS Value Inspection Table")
+            # Direct actionable recommendation notice box
+            st.warning(f"""
+            💡 **Engine Recommendations:**
+            * Set **Target Optical Gap** to: `{intel_report['rec_gap']}`
+            * Set **Trap Protection Buffer** to: `{intel_report['rec_buffer']}`
+            """)
+            
+            st.subheader("🧬 Character Map Fingerprint")
+            st.info(f"**Detected Archetype:** {charset_analysis['type']}")
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                st.metric(label="A-Z Uppercase", value=charset_analysis['caps'])
+                st.metric(label="0-9 Numbers", value=charset_analysis['digits'])
+            with m_col2:
+                st.metric(label="a-z Lowercase", value=charset_analysis['lower'])
+                st.metric(label="Punctuation/Symbols", value=charset_analysis['punct'])
+            
+            st.subheader("📊 GPOS Table Audit")
             if kern_pairs:
-                table_data = [{"Left Glyph": k[0], "Right Glyph": k[1], "Value (FUnits)": v} for k, v in kern_pairs.items()]
-                st.dataframe(pd.DataFrame(table_data), use_container_width=True, height=250)
+                table_data = [{"Left": k[0], "Right": k[1], "Value": v} for k, v in kern_pairs.items()]
+                df = pd.DataFrame(table_data)
+                st.dataframe(df, use_container_width=True, height=180)
 
-        with preview_tab:
-            st.subheader("🔍 Layout Proofing Area")
+        with col2:
+            st.subheader("🔍 Contextual Testing Sandboxes")
             default_test_string = "AVALANCHE TYPE FACE" if charset_analysis['type'] == "All-Caps Display Face" else "T. V, F-Y Hamburgevons"
+            
             user_input = st.text_input("Custom Layout Tester String:", default_test_string)
             if user_input:
                 st.markdown(f'<div class="preview-display size-lg">{user_input}</div>', unsafe_allow_html=True)
             
-            st.subheader("🌊 Scale Waterfall Proof")
+            st.write("---")
+            st.subheader("🌊 Scale Waterfall")
             proof_text = "Hamburgevons 123!?." if charset_analysis['lower'] > 0 else "HAMBURGEVONS 123!?."
-            st.caption("Display Treatment Scale (64px)")
+            st.caption("Display Level (64px)")
             st.markdown(f'<div class="preview-display size-lg">{proof_text}</div>', unsafe_allow_html=True)
-            st.caption("Text Body Scale (36px)")
+            st.caption("Text Body Level (36px)")
             st.markdown(f'<div class="preview-display size-md">{proof_text}</div>', unsafe_allow_html=True)
 
     except Exception as e:
