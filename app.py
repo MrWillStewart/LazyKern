@@ -21,7 +21,7 @@ def inject_pro_cleaner():
     </style>
     """, unsafe_allow_html=True)
 
-# --- 1. CORE GEOMETRY ENGINE ---
+# --- 1. CORE GEOMETRY ENGINE (Kept as is) ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
@@ -69,9 +69,7 @@ def get_glyph_profiles(font, step_size=5):
         for x, y in pen.points:
             y_slice = int(round(y / step_size) * step_size)
             slices.setdefault(y_slice, []).append(x)
-        left_prof = {y: min(x) for y, x in slices.items()}
-        right_prof = {y: max(x) for y, x in slices.items()}
-        profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph_set[name].width}
+        profiles[name] = {"left": {y: min(x) for y, x in slices.items()}, "right": {y: max(x) for y, x in slices.items()}, "advance": glyph_set[name].width}
     return profiles
 
 def get_optical_class(name):
@@ -112,18 +110,22 @@ st.title("LazyKern")
 uploaded_file = st.file_uploader("Upload Font", type=["ttf", "otf"])
 
 if uploaded_file:
-    font = TTFont(io.BytesIO(uploaded_file.getvalue()))
-    if "profiles" not in st.session_state:
+    if "filename" not in st.session_state or st.session_state.filename != uploaded_file.name:
+        font_bytes = uploaded_file.read()
+        font = TTFont(io.BytesIO(font_bytes))
+        st.session_state.original_bytes = font_bytes
+        st.session_state.filename = uploaded_file.name
         st.session_state.profiles = get_glyph_profiles(font)
+        st.session_state.pairs = [(a, b) for a in st.session_state.profiles for b in st.session_state.profiles]
         st.session_state.supported = {chr(cp) for cp in font.getBestCmap().keys()}
     
     gap = st.slider("Target Gap", 10, 100, 60, 5)
     use_kern = st.toggle("Apply Auto-Kerning", True)
     
-    bytes_data = uploaded_file.getvalue()
+    bytes_data = st.session_state.original_bytes
     if use_kern:
-        pairs = [(a, b) for a in st.session_state.profiles for b in st.session_state.profiles]
-        k = calculate_kerning(st.session_state.profiles, pairs, gap)
+        font = TTFont(io.BytesIO(bytes_data))
+        k = calculate_kerning(st.session_state.profiles, st.session_state.pairs, gap)
         fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in k.items()] + ["} kern;"]
         addOpenTypeFeaturesFromString(font, "\n".join(fea))
         out = io.BytesIO()
@@ -131,9 +133,16 @@ if uploaded_file:
         bytes_data = out.getvalue()
 
     b64 = base64.b64encode(bytes_data).decode()
-    st.markdown(f"<style>@font-face {{font-family:'LiveFont'; src:url('data:font/ttf;base64,{b64}');}} .p {{font-family:'LiveFont'; font-size:48px;}}</style>", unsafe_allow_html=True)
+    st.markdown(f"<style>@font-face {{font-family:'LiveFont'; src:url('data:font/ttf;base64,{b64}');}} .tester-box {{font-family:'LiveFont',sans-serif; font-size:48px; width:100%; height:140px; padding:15px; border:1px solid #ccc;}}</style>", unsafe_allow_html=True)
     
-    user_in = st.text_input("Preview:", "START.YOUR.ENGINES.")
-    clean = "".join([c for c in user_in if c in st.session_state.supported or c in [" ", "."]])
-    st.markdown(f"<div class='p'>{clean}</div>", unsafe_allow_html=True)
+    # Simple sanitization within the same box
+    user_in = st.text_area("Live Preview", value="START.YOUR.ENGINES.", key="t")
+    clean = "".join([c for c in user_in if c in st.session_state.supported or c in [" ", "\n", "."]])
+    
+    # If the user typed something invalid, force update
+    if user_in != clean:
+        st.session_state.t = clean
+        st.rerun()
+        
+    st.markdown(f"<div class='tester-box'>{clean}</div>", unsafe_allow_html=True)
     st.download_button("Download", bytes_data, f"kerned_{uploaded_file.name}")
