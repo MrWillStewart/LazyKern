@@ -86,7 +86,7 @@ def calculate_kerning(profiles, target_gap):
             # 1. OPTICAL TUCKING LOGIC
             offset = 0
             if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION':
-                offset = -50 # Aggressive tuck
+                offset = -30 # Aggressive tuck
             elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG':
                 offset = -10
             elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT':
