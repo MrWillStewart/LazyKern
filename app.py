@@ -73,31 +73,23 @@ def get_glyph_profiles(font, step_size=10):
         profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph.width}
     return profiles
 
-# --- TYPOGRAPHIC KNOWLEDGE ENGINE (THE INTELLIGENCE LAYER) ---
 def get_optical_class(glyph_name):
-    """Categorizes glyph profiles to apply structural typographic offsets."""
     name = glyph_name.lower().strip('_')
-    
-    # Punctuation bounds behave erratically compared to letterforms
-    if name in ['period', 'comma', 'colon', 'semicolon', 'hyphen', 'exclam', 'question', 'dot']:
+    if name in ['period', 'comma', 'colon', 'semicolon', 'hyphen', 'exclam', 'question', 'dot', 'underscore']:
         return 'PUNCTUATION'
-    # Open / Diagonal structures create visual vacuum zones but hazard points at terminal edges
     if name in ['t', 'v', 'w', 'y', 'a', 'x', 'f', 'k', 'l']:
         return 'DIAGONAL_OPEN'
-    # Round structures create soft visual whitespace edges
     if name in ['o', 'c', 'q', 'g', 'e', 'd', 'p', 'b']:
         return 'ROUND'
-    # Straight parallel configurations demand higher breathing room to prevent optical choking
     if name in ['h', 'i', 'm', 'n', 'u', 'j', 'r']:
         return 'STRAIGHT'
     return 'DEFAULT'
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    
-    # Strict physical floor threshold (In font units). Outlines cannot cross closer than this.
-    ABS_SAFE_CLEARANCE = 15 
+    ABS_SAFE_CLEARANCE = 20  # Minimum structural distance in font units
 
+    # --- PHASE 1: ADJACENT PAIR CALCULATION ---
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
             prof_l = profiles[left]["right"]
@@ -105,38 +97,78 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            # 1. Apply Typographic Optical Adjustments
             class_l = get_optical_class(left)
-            class_r = get_optical_class(get_optical_class(right))
+            class_r = get_optical_class(right)
             
             optical_modifier = 0
             if class_l == 'STRAIGHT' and class_r == 'STRAIGHT':
-                optical_modifier += 12  # Give parallel straight lines slightly more padding
+                optical_modifier += 15
             elif class_l == 'ROUND' and class_r == 'ROUND':
-                optical_modifier -= 10  # Pull rounds tighter together safely
+                optical_modifier -= 10
             elif (class_l == 'DIAGONAL_OPEN' and class_r == 'PUNCTUATION') or (class_l == 'PUNCTUATION' and class_r == 'DIAGONAL_OPEN'):
-                optical_modifier -= 20  # Tuck punctuation under overhangs aggressively
-            elif class_l == 'DIAGONAL_OPEN' and class_r == 'DIAGONAL_OPEN':
-                optical_modifier -= 4   # Let diagonals interlock tightly
-
-            adjusted_target = target_gap + optical_modifier
+                optical_modifier -= 15
             
-            # Base geometric math execution
+            adjusted_target = target_gap + optical_modifier
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
             kern_val = int(adjusted_target - min_dist)
             
-            # 2. THE ANTI-CLASH ENGINE (Matrix Collision Safeguard)
-            # Simulates the spatial distribution across every single horizontal layer post-kerning
+            # Adjacent Anti-Clash Verification Loop
+            max_adjacent_compensation = 0
             for y in common_ys:
-                projected_physical_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
-                if projected_physical_space < ABS_SAFE_CLEARANCE:
-                    # Over-interpolation detected. Dial back the adjustment to match the protective floor.
-                    clash_overlap_compensation = ABS_SAFE_CLEARANCE - projected_physical_space
-                    kern_val -= int(math.ceil(clash_overlap_compensation))
+                projected_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
+                if projected_space < ABS_SAFE_CLEARANCE:
+                    compensation = ABS_SAFE_CLEARANCE - projected_space
+                    if compensation > max_adjacent_compensation:
+                        max_adjacent_compensation = compensation
+            
+            if max_adjacent_compensation > 0:
+                kern_val += int(math.ceil(max_adjacent_compensation))
 
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
+
+    # --- PHASE 2: LOOK-THROUGH TRIPLET SAFETY LAYER ---
+    # Scans across low profile barriers (periods, spaces) to prevent secondary letter collisions
+    trigger_shorts = ['space']
+    for g, prof in profiles.items():
+        ys = prof["left"].keys()
+        if ys and max(ys) < 300:  # Any glyph that sits purely on the bottom baseline
+            trigger_shorts.append(g)
+    trigger_shorts = list(set(trigger_shorts))
+
+    for L in profiles.keys():
+        for M in trigger_shorts:
+            for R in profiles.keys():
+                k_lm = kern_pairs.get((L, M), 0)
+                k_mr = kern_pairs.get((M, R), 0)
                 
+                # Check where outer envelopes exist simultaneously (e.g. cap height)
+                common_ys_lr = set(profiles[L]["right"].keys()).intersection(set(profiles[R]["left"].keys()))
+                if not common_ys_lr: continue
+                
+                max_clash_compensation = 0
+                for y in common_ys_lr:
+                    prof_l_edge = profiles[L]["right"][y]
+                    prof_r_edge = profiles[R]["left"][y]
+                    adv_l = profiles[L]["advance"]
+                    adv_m = profiles[M]["advance"]
+                    
+                    # Total spatial depth across the middle boundary channel
+                    space_between_lr = (adv_l + k_lm + adv_m + k_mr + prof_r_edge) - prof_l_edge
+                    
+                    if space_between_lr < ABS_SAFE_CLEARANCE:
+                        compensation = ABS_SAFE_CLEARANCE - space_between_lr
+                        if compensation > max_clash_compensation:
+                            max_clash_compensation = compensation
+                
+                if max_clash_compensation > 0:
+                    # Dynamically re-balance and push both channels open evenly
+                    shift = int(math.ceil(max_clash_compensation / 2.0))
+                    if (L, M) in kern_pairs or k_lm != 0:
+                        kern_pairs[(L, M)] = kern_pairs.get((L, M), 0) + shift
+                    if (M, R) in kern_pairs or k_mr != 0:
+                        kern_pairs[(M, R)] = kern_pairs.get((M, R), 0) + shift
+                        
     return kern_pairs
 
 # --- 2. STREAMLIT RUNTIME ---
@@ -147,7 +179,6 @@ st.title("LazyKern")
 uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 
 if uploaded_file:
-    # High-Performance Memory Caching Layer
     if "filename" not in st.session_state or st.session_state.filename != uploaded_file.name:
         with st.spinner("Analyzing font geometry profiles..."):
             font_bytes = uploaded_file.read()
@@ -159,11 +190,9 @@ if uploaded_file:
             glyphs = [g for g in st.session_state.profiles.keys() if g not in [".notdef", "space"]]
             st.session_state.pairs = [(a, b) for a in glyphs for b in glyphs]
 
-    # Dynamic Control Mechanics
     gap = st.slider("Target Gap (Tightness)", min_value=10, max_value=100, value=60, step=5)
     use_kerning = st.toggle("Apply Auto-Kerning", value=True)
     
-    # Real-Time Kerning Matrix Calculation Pipeline
     if use_kerning and "profiles" in st.session_state:
         font = TTFont(io.BytesIO(st.session_state.original_bytes))
         kern_pairs = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap=gap)
@@ -178,7 +207,6 @@ if uploaded_file:
     else:
         active_font_bytes = st.session_state.original_bytes
 
-    # Inline Live Font Delivery Matrix
     b64_font = base64.b64encode(active_font_bytes).decode('utf-8')
     font_fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
     
