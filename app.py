@@ -69,9 +69,14 @@ def get_glyph_profiles(font):
         profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph_set[name].width}
     return profiles
 
+def get_supported_chars(font):
+    # Returns a set of characters that actually have glyphs in the font
+    cmap = font.getBestCmap()
+    return set(chr(cp) for cp in cmap.keys())
+
 def calculate_kerning(profiles, target_gap):
     kern_pairs = {}
-    ABS_SAFE_CLEARANCE = 35 # Increased slightly to open up the collision zones
+    ABS_SAFE_CLEARANCE = 35 
     keys = list(profiles.keys())
     
     for left in keys:
@@ -83,22 +88,15 @@ def calculate_kerning(profiles, target_gap):
             
             cat_l, cat_r = get_optical_category(left), get_optical_category(right)
             
-            # 1. OPTICAL TUCKING LOGIC (Softened from -50 to -35)
             offset = 0
-            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION':
-                offset = -35 
-            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG':
-                offset = -10
-            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT':
-                offset = 10
-            elif cat_l == 'ROUND' and cat_r == 'ROUND':
-                offset = -10
+            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION': offset = -35 
+            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG': offset = -10
+            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT': offset = 10
+            elif cat_l == 'ROUND' and cat_r == 'ROUND': offset = -10
             
-            # 2. SAFETY LAYER
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
             kern_val = int((target_gap + offset) - min_dist)
             
-            # Enforce Hardline
             for y in common_ys:
                 projected_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
                 if projected_space < ABS_SAFE_CLEARANCE:
@@ -115,8 +113,10 @@ st.title("LazyKern Live")
 uploaded_file = st.file_uploader("Upload Font", type=["ttf", "otf"])
 
 if uploaded_file:
-    font = TTFont(io.BytesIO(uploaded_file.read()))
+    font_data_raw = uploaded_file.read()
+    font = TTFont(io.BytesIO(font_data_raw))
     profiles = get_glyph_profiles(font)
+    supported_chars = get_supported_chars(font)
     
     use_kern = st.toggle("Apply Auto-Kerning", value=True)
     gap = st.slider("Target Gap", 10, 100, 60, 5)
@@ -128,9 +128,13 @@ if uploaded_file:
     
     out = io.BytesIO()
     font.save(out)
-    font_data = out.getvalue()
-    b64 = base64.b64encode(font_data).decode('utf-8')
+    font_bytes = out.getvalue()
+    b64 = base64.b64encode(font_bytes).decode('utf-8')
     
+    # Filter function: Only allow characters present in supported_chars
+    def sanitize_input(text):
+        return "".join([c for c in text if c in supported_chars or c in [" ", "\n"]])
+
     st.markdown(f"""
         <style>
         @font-face {{ font-family: 'LiveFont'; src: url('data:font/ttf;base64,{b64}'); }}
@@ -143,5 +147,13 @@ if uploaded_file:
         </style>
     """, unsafe_allow_html=True)
     
-    st.text_area("Test your kerning here:", value="T. Y. P. V. A. O. H. | T Y P V A", key="tester")
-    st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
+    # Text area with automatic input cleaning
+    user_input = st.text_area("Test your kerning here:", value="START.YOUR.ENGINES.", key="tester")
+    
+    # If the user typed something invalid, we sanitize it immediately
+    if user_input != sanitize_input(user_input):
+        st.warning("Some characters were stripped because they are not supported by the font.")
+        st.session_state.tester = sanitize_input(user_input)
+        st.rerun()
+
+    st.download_button("Download Kerned Font", font_bytes, f"kerned_{uploaded_file.name}")
