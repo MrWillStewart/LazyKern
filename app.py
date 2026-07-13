@@ -10,16 +10,12 @@ from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 def inject_pro_cleaner():
     st.markdown("""
     <style>
-    /* Hide top header bar, footer, and main menu */
     [data-testid="stHeader"] { display: none !important; }
     footer { visibility: hidden !important; }
     #MainMenu { visibility: hidden !important; }
-    
-    /* Remove the link/anchor icons next to all titles */
     .header-anchor { display: none !important; }
     h1 a, h2 a, h3 a, h4 a { display: none !important; }
     
-    /* Enforce Design System Typography */
     h1, h2, h3, h4, label, .stMarkdown p {
         font-family: 'Departure Mono', monospace !important;
     }
@@ -77,8 +73,31 @@ def get_glyph_profiles(font, step_size=10):
         profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph.width}
     return profiles
 
+# --- TYPOGRAPHIC KNOWLEDGE ENGINE (THE INTELLIGENCE LAYER) ---
+def get_optical_class(glyph_name):
+    """Categorizes glyph profiles to apply structural typographic offsets."""
+    name = glyph_name.lower().strip('_')
+    
+    # Punctuation bounds behave erratically compared to letterforms
+    if name in ['period', 'comma', 'colon', 'semicolon', 'hyphen', 'exclam', 'question', 'dot']:
+        return 'PUNCTUATION'
+    # Open / Diagonal structures create visual vacuum zones but hazard points at terminal edges
+    if name in ['t', 'v', 'w', 'y', 'a', 'x', 'f', 'k', 'l']:
+        return 'DIAGONAL_OPEN'
+    # Round structures create soft visual whitespace edges
+    if name in ['o', 'c', 'q', 'g', 'e', 'd', 'p', 'b']:
+        return 'ROUND'
+    # Straight parallel configurations demand higher breathing room to prevent optical choking
+    if name in ['h', 'i', 'm', 'n', 'u', 'j', 'r']:
+        return 'STRAIGHT'
+    return 'DEFAULT'
+
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
+    
+    # Strict physical floor threshold (In font units). Outlines cannot cross closer than this.
+    ABS_SAFE_CLEARANCE = 15 
+
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
             prof_l = profiles[left]["right"]
@@ -86,11 +105,38 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
-            kern_val = int(target_gap - min_dist)
+            # 1. Apply Typographic Optical Adjustments
+            class_l = get_optical_class(left)
+            class_r = get_optical_class(get_optical_class(right))
             
+            optical_modifier = 0
+            if class_l == 'STRAIGHT' and class_r == 'STRAIGHT':
+                optical_modifier += 12  # Give parallel straight lines slightly more padding
+            elif class_l == 'ROUND' and class_r == 'ROUND':
+                optical_modifier -= 10  # Pull rounds tighter together safely
+            elif (class_l == 'DIAGONAL_OPEN' and class_r == 'PUNCTUATION') or (class_l == 'PUNCTUATION' and class_r == 'DIAGONAL_OPEN'):
+                optical_modifier -= 20  # Tuck punctuation under overhangs aggressively
+            elif class_l == 'DIAGONAL_OPEN' and class_r == 'DIAGONAL_OPEN':
+                optical_modifier -= 4   # Let diagonals interlock tightly
+
+            adjusted_target = target_gap + optical_modifier
+            
+            # Base geometric math execution
+            min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
+            kern_val = int(adjusted_target - min_dist)
+            
+            # 2. THE ANTI-CLASH ENGINE (Matrix Collision Safeguard)
+            # Simulates the spatial distribution across every single horizontal layer post-kerning
+            for y in common_ys:
+                projected_physical_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
+                if projected_physical_space < ABS_SAFE_CLEARANCE:
+                    # Over-interpolation detected. Dial back the adjustment to match the protective floor.
+                    clash_overlap_compensation = ABS_SAFE_CLEARANCE - projected_physical_space
+                    kern_val -= int(math.ceil(clash_overlap_compensation))
+
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
+                
     return kern_pairs
 
 # --- 2. STREAMLIT RUNTIME ---
@@ -108,7 +154,6 @@ if uploaded_file:
             st.session_state.original_bytes = font_bytes
             st.session_state.filename = uploaded_file.name
             
-            # Map structural coordinates once to allow real-time adjustments later
             font = TTFont(io.BytesIO(font_bytes))
             st.session_state.profiles = get_glyph_profiles(font)
             glyphs = [g for g in st.session_state.profiles.keys() if g not in [".notdef", "space"]]
@@ -133,7 +178,7 @@ if uploaded_file:
     else:
         active_font_bytes = st.session_state.original_bytes
 
-    # Inline Live Font Delivery via Sandbox Data-URI Matrix
+    # Inline Live Font Delivery Matrix
     b64_font = base64.b64encode(active_font_bytes).decode('utf-8')
     font_fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
     
@@ -163,7 +208,6 @@ if uploaded_file:
     st.subheader("Live Preview")
     st.markdown('<textarea class="tester-box">AVAW YOU TEST.</textarea>', unsafe_allow_html=True)
 
-    # Contextual Asset Delivery
     st.download_button(
         label="📥 Download Kerned Font File", 
         data=active_font_bytes, 
