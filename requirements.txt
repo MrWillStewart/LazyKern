@@ -1,4 +1,4 @@
 streamlit
 fonttools
-brotli
+pandas
 skia-pathops
