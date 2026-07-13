@@ -7,7 +7,8 @@ from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
 # --- 0. BRANDING STRIPPER & TYPOGRAPHY ENFORCER ---
-def inject_pro_cleaner():
+st.set_page_config(page_title="LazyKern", layout="centered")
+inject_pro_cleaner() # <--- Must be right here
     st.markdown("""
     <style>
     /* Nuke all branding elements across all versions */
