@@ -126,9 +126,9 @@ def get_optical_class(glyph_name):
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    ABS_SAFE_CLEARANCE = 25 
-
-    # --- PHASE 1: ADJACENT PAIR CALCULATION ---
+    # Strict physical limit to prevent actual overlap
+    PHYSICAL_MIN_GAP = 15 
+    
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
             prof_l = profiles[left]["right"]
@@ -136,20 +136,32 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
+            # Determine visual class for intelligent spacing
             class_l = get_optical_class(left)
             class_r = get_optical_class(right)
             
-            optical_modifier = 0
+            # Dynamic spacing logic based on shape interaction
             if class_l == 'STRAIGHT' and class_r == 'STRAIGHT':
-                optical_modifier += 15
-            elif class_l == 'ROUND' and class_r == 'ROUND':
-                optical_modifier -= 10
-            elif (class_l == 'DIAGONAL_OPEN' and class_r == 'PUNCTUATION') or (class_l == 'PUNCTUATION' and class_r == 'DIAGONAL_OPEN'):
-                optical_modifier -= 15
+                base_target = target_gap + 5
+            elif class_l == 'ROUND' or class_r == 'ROUND':
+                base_target = target_gap - 20 # Allows rounds to tuck in
+            else:
+                base_target = target_gap
             
-            adjusted_target = target_gap + optical_modifier
+            # Find the tightest point
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
-            kern_val = int(adjusted_target - min_dist)
+            kern_val = int(base_target - min_dist)
+            
+            # Collision Enforcement: Only push if we are below the physical absolute limit
+            for y in common_ys:
+                current_gap = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
+                if current_gap < PHYSICAL_MIN_GAP:
+                    kern_val += (PHYSICAL_MIN_GAP - current_gap)
+            
+            if abs(kern_val) > 2:
+                kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
+    
+    return kern_pairs
             
             # --- THE HARDLINE ANTI-OVERLAP SWEEP ---
             max_adjacent_compensation = 0
