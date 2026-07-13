@@ -1,10 +1,10 @@
 import streamlit as st
 import io
-import math
 import base64
 from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+import math
 
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
@@ -61,45 +61,41 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     total_pairs = len(pairs_to_kern)
     
     for i, (left, right) in enumerate(pairs_to_kern):
-        if i % 50 == 0: progress_bar.progress(i / total_pairs)
+        if i % 100 == 0: progress_bar.progress(i / total_pairs)
         if left not in profiles or right not in profiles: continue
         
-        # Bounding box culling for speed
+        # Bounding box culling
         if (profiles[right]["min_x"] + profiles[left]["advance"]) > (profiles[left]["max_x"] + target_gap + 50):
             continue
             
-        points_l = profiles[left]["points"]
-        points_r = profiles[right]["points"]
-        advance_l = profiles[left]["advance"]
-        
-        # Collision simulation: Find max encroachment
+        # Collision check
         needed_kern = target_gap - 100
-        for lx, ly in points_l:
-            for rx, ry in points_r:
+        for lx, ly in profiles[left]["points"]:
+            for rx, ry in profiles[right]["points"]:
                 if abs(ly - ry) < 5:
-                    dist = (rx + advance_l) - lx
+                    dist = (rx + profiles[left]["advance"]) - lx
                     if dist < target_gap:
                         needed_kern = max(needed_kern, target_gap - dist)
         
         if needed_kern > 5:
             kern_pairs[(left, right)] = int(round(needed_kern / 5.0) * 5)
-            
     progress_bar.empty()
     return kern_pairs
 
 # --- 2. STREAMLIT UI ---
-st.set_page_config(page_title="LazyKern Pro", layout="centered")
+st.set_page_config(page_title="LazyKern Pro", layout="wide")
 st.title("LazyKern Pro")
 uploaded_file = st.file_uploader("Upload Font", type=["ttf", "otf"])
 
 if uploaded_file:
-    font = TTFont(io.BytesIO(uploaded_file.read()))
+    font_bytes = uploaded_file.read()
+    font = TTFont(io.BytesIO(font_bytes))
     profiles = get_glyph_profiles(font)
     glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
     pairs = [(a, b) for a in glyphs for b in glyphs]
-    gap = st.slider("Target Gap", 10, 100, 60, 5)
+    gap = st.slider("Target Gap (Kerning Tightness)", 10, 100, 60, 5)
     
-    if st.button("Generate & Optimize Kerning"):
+    if st.button("Generate & Optimize"):
         kern_pairs = calculate_kerning(profiles, pairs, target_gap=gap)
         
         if kern_pairs:
@@ -108,5 +104,16 @@ if uploaded_file:
         
         out = io.BytesIO()
         font.save(out)
-        st.success("Kerning Applied!")
-        st.download_button("Download", out.getvalue(), f"kerned_{uploaded_file.name}")
+        font_data = out.getvalue()
+        
+        # --- PREVIEWER ---
+        b64 = base64.b64encode(font_data).decode('utf-8')
+        st.markdown(f"""
+        <style>
+        @font-face {{font-family: 'LiveFont'; src: url('data:font/ttf;charset=utf-8;base64,{b64}');}}
+        .tester {{font-family: 'LiveFont'; font-size: 64px; width: 100%; border: 2px solid #444; padding: 20px; border-radius: 8px;}}
+        </style>
+        <textarea class="tester" placeholder="Type here to test your new kerning...">AVAW ST GR TEST</textarea>
+        """, unsafe_allow_html=True)
+        
+        st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
