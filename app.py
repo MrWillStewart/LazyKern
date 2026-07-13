@@ -10,12 +10,25 @@ from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 def inject_pro_cleaner():
     st.markdown("""
     <style>
+    /* Hide Top Header & Hamburger Menu */
     [data-testid="stHeader"] { display: none !important; }
-    footer { visibility: hidden !important; }
-    #MainMenu { visibility: hidden !important; }
+    #MainMenu { display: none !important; }
+    
+    /* Hide 'Built with Streamlit' Footers (Covers multiple Streamlit versions) */
+    footer { display: none !important; }
+    [data-testid="stBottom"] { display: none !important; }
+    [data-testid="stAppFooter"] { display: none !important; }
+    
+    /* Hide Full-Screen Toggles on Hover */
+    button[title="View fullscreen"] { display: none !important; }
+    [data-testid="StyledFullScreenButton"] { display: none !important; }
+    .st-emotion-cache-1rqvspb { display: none !important; } /* Fallback for fullscreen icon */
+
+    /* Hide Link Anchors on Headers */
     .header-anchor { display: none !important; }
     h1 a, h2 a, h3 a, h4 a { display: none !important; }
     
+    /* Force Custom Typography */
     h1, h2, h3, h4, label, .stMarkdown p {
         font-family: 'Departure Mono', monospace !important;
     }
