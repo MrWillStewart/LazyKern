@@ -6,7 +6,7 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
-# --- 1. GEOMETRY ENGINE ---
+# --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
@@ -41,19 +41,17 @@ class ProfilePen(BasePen):
             y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
             self.points.append((x, y))
 
-# --- 2. TYPOGRAPHIC RULES ---
 def get_optical_category(name):
+    # Explicit definition of categories including the "Culprits"
     n = name.lower()
-    # The "Culprits": These letters have wide tops and narrow bottoms (overhangs)
-    if n in ['t', 'y', 'p', 'v', 'w', 'a', 'f']: return 'DIAGONAL_OVERHANG'
-    if n in ['h', 'n', 'm', 'u', 'i', 'l']: return 'STRAIGHT'
+    if n in ['t', 'y', 'p', 'v', 'w', 'a', 'f', 'k', 'z']: return 'DIAGONAL_OVERHANG'
+    if n in ['h', 'n', 'm', 'u', 'i', 'l', 'd', 'b']: return 'STRAIGHT'
     if n in ['o', 'c', 'g', 'q', 'e', 's']: return 'ROUND'
-    if n in ['.', ',', ':', ';', '-', '!', '?']: return 'PUNCTUATION'
+    if n in ['.', ',', ':', ';', '-', '!', '?', 'period', 'comma']: return 'PUNCTUATION'
     return 'DEFAULT'
 
 def get_glyph_profiles(font):
     glyph_set = font.getGlyphSet()
-    # ONLY process what exists in the font
     profiles = {}
     for name in glyph_set.keys():
         if name in {'.notdef', 'space', 'null', 'CR'}: continue
@@ -72,7 +70,7 @@ def get_glyph_profiles(font):
         profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph_set[name].width}
     return profiles
 
-def calculate_kerning(profiles, target_gap=60):
+def calculate_kerning(profiles, target_gap):
     kern_pairs = {}
     keys = list(profiles.keys())
     
@@ -83,59 +81,55 @@ def calculate_kerning(profiles, target_gap=60):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            # Identify optical behavior
+            # Logic: Diagonal/Overhang vs Punctuation = Aggressive Tuck
             cat_l, cat_r = get_optical_category(left), get_optical_category(right)
             
-            # CUSTOM CULPRIT RULES
-            # 1. Diagonal Overhang + Punctuation = TUCK (Aggressive negative)
-            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION':
-                adjustment = -30 
-            # 2. Punctuation + Diagonal Overhang = SLIGHT TUCK
-            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG':
-                adjustment = -10
-            # 3. Straight + Straight = More space
-            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT':
-                adjustment = 10
-            else:
-                adjustment = 0
-                
+            offset = 0
+            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION': offset = -40 # Tuck punctuation under
+            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG': offset = -15 # Slight adjustment
+            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT': offset = 10 # Breathing room
+            elif cat_l == 'ROUND' and cat_r == 'ROUND': offset = -10
+            
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
-            kern_val = int((target_gap + adjustment) - min_dist)
+            kern_val = int((target_gap + offset) - min_dist)
             
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
     return kern_pairs
 
-# --- 3. UI ---
-st.set_page_config(page_title="LazyKern Pro", layout="centered")
-st.title("LazyKern Pro: Culinary Kerning")
+# --- 2. UI ---
+st.set_page_config(page_title="LazyKern Live", layout="centered")
+st.title("LazyKern Live")
 uploaded_file = st.file_uploader("Upload Font", type=["ttf", "otf"])
 
 if uploaded_file:
+    # Load Font
     font = TTFont(io.BytesIO(uploaded_file.read()))
     profiles = get_glyph_profiles(font)
+    
+    # UI Controls
+    use_kern = st.toggle("Apply Auto-Kerning", value=True)
     gap = st.slider("Target Gap", 10, 100, 60, 5)
     
-    if st.button("Apply Rules & Generate"):
-        kern_pairs = calculate_kerning(profiles, target_gap=gap)
+    # Process
+    if use_kern:
+        kern_pairs = calculate_kerning(profiles, gap)
         fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
         addOpenTypeFeaturesFromString(font, "\n".join(fea))
-        
-        out = io.BytesIO()
-        font.save(out)
-        font_data = out.getvalue()
-        b64 = base64.b64encode(font_data).decode('utf-8')
-        
-        # Check available glyphs to build a safe test string
-        test_str = "T. T, P. Y. V. A. O. H."
-        safe_str = "".join([c for c in test_str if c in profiles or c == " "])
-        
-        st.markdown(f"""
-            <style>
-            @font-face {{ font-family: 'LiveFont'; src: url('data:font/ttf;base64,{b64}'); }}
-            .test {{ font-family: 'LiveFont'; font-size: 50px; border: 1px solid #ccc; padding: 20px; }}
-            </style>
-            <div class="test">{safe_str}</div>
-        """, unsafe_allow_html=True)
-        
-        st.download_button("Download", font_data, f"kerned_{uploaded_file.name}")
+    
+    # Export
+    out = io.BytesIO()
+    font.save(out)
+    font_data = out.getvalue()
+    
+    # Preview
+    b64 = base64.b64encode(font_data).decode('utf-8')
+    st.markdown(f"""
+        <style>
+        @font-face {{ font-family: 'LiveFont'; src: url('data:font/ttf;base64,{b64}'); }}
+        .tester {{ font-family: 'LiveFont'; font-size: 40px; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }}
+        </style>
+        <div class="tester">T. Y. P. V. A. O. H. | T Y P V A</div>
+    """, unsafe_allow_html=True)
+    
+    st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
