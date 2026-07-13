@@ -127,7 +127,7 @@ def get_optical_class(glyph_name):
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
     # The physical "force field" that prevents overlap regardless of character shape
-    PHYSICAL_MIN_GAP = 20 
+    PHYSICAL_MIN_GAP = 10 
     
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
