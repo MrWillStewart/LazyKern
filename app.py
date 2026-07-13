@@ -126,9 +126,9 @@ def get_optical_class(glyph_name):
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    PHYSICAL_MIN_GAP = 10 # The absolute force-field limit
+    # The physical "force field" that prevents overlap regardless of character shape
+    PHYSICAL_MIN_GAP = 20 
     
-    # PASS 1: Calculate basic optical spacing
     for left, right in pairs_to_kern:
         if left in profiles and right in profiles:
             prof_l = profiles[left]["right"]
@@ -136,19 +136,24 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
             common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
             if not common_ys: continue
             
-            # Use a slightly more aggressive base gap for better flow
-            base_target = target_gap
+            # 1. Start with the target gap as the baseline for all pairs
+            # This ensures no "exceptions" are forced into the math
+            base_dist = target_gap
             
+            # 2. Find the minimum distance between the two shapes
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
-            kern_val = int(base_target - min_dist)
             
-            # PASS 2: Universal Collision Solver
-            # This loops through every single Y-slice to ensure NO overlap occurs
+            # 3. Calculate initial kern
+            kern_val = int(base_dist - min_dist)
+            
+            # 4. Global Collision Sweep: 
+            # If ANY point on the two glyphs is closer than the limit, push them apart
             for y in common_ys:
                 current_gap = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
                 if current_gap < PHYSICAL_MIN_GAP:
                     kern_val += (PHYSICAL_MIN_GAP - current_gap)
             
+            # 5. Only record if there is a significant change
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
                         
