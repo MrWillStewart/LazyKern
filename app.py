@@ -6,65 +6,6 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
-# --- 0. CUSTOM STYLING ENGINE ---
-def inject_custom_css():
-    st.markdown("""
-    <style>
-    /* 1. Global Font Setup */
-    @import url('https://fonts.googleapis.com/css2?family=Departure+Mono&display=swap');
-
-    html, body, [class*="st-"] {
-        font-family: 'Departure Mono', monospace !important;
-    }
-
-    /* 2. Typography - Title: Black 26/26 */
-    h1, h2, h3 {
-        color: #000000 !important;
-        font-size: 26px !important;
-        line-height: 26px !important;
-        font-weight: normal !important;
-        margin-bottom: 20px !important;
-    }
-    
-    /* 3. Typography - Body: #4C5B6B 13/20 */
-    p, div, label, .stMarkdown {
-        color: #4C5B6B !important;
-        font-size: 13px !important;
-        line-height: 20px !important;
-    }
-
-    /* 4. Button: Black bg, White text */
-    div.stButton > button {
-        background-color: #000000 !important;
-        color: #ffffff !important;
-        border-radius: 10px !important;
-        border: none !important;
-        font-family: 'Departure Mono', monospace !important;
-        padding: 10px 20px !important;
-    }
-    div.stButton > button:hover {
-        background-color: #333333 !important;
-    }
-
-    /* 5. Container: White bg, 1px #DAE1E8 stroke, 10px rounding */
-    .stApp {
-        background-color: white !important;
-        border: 1px solid #DAE1E8 !important;
-        border-radius: 10px !important;
-        overflow: hidden !important;
-        padding: 20px !important;
-    }
-    
-    .block-container {
-        padding: 20px !important;
-        max-width: 100% !important;
-    }
-    
-    /* Hide scrollbars */
-    ::-webkit-scrollbar { display: none; }
-    </style>
-    """, unsafe_allow_html=True)
-
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
@@ -132,9 +73,8 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=40):
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
     return kern_pairs
 
-# --- 2. STREAMLIT APP ---
+# --- 2. BARE-BONES APP LOGIC ---
 st.set_page_config(page_title="LazyKern", layout="centered")
-inject_custom_css()
 
 st.title("LazyKern ✒️")
 uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
@@ -150,6 +90,7 @@ if uploaded_file:
     # Font Injector for Live Preview
     b64_font = base64.b64encode(st.session_state.font_bytes).decode('utf-8')
     font_fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
+    
     st.markdown(f"""
         <style>
             @font-face {{
@@ -163,9 +104,8 @@ if uploaded_file:
                 min-height: 120px;
                 padding: 15px;
                 margin-bottom: 20px;
-                border: 1px solid #DAE1E8;
-                border-radius: 10px;
-                color: #000;
+                border: 1px solid #ddd;
+                border-radius: 8px;
                 line-height: 1.2;
             }}
         </style>
@@ -174,6 +114,7 @@ if uploaded_file:
     st.subheader("Live Preview")
     status = "Kerned" if st.session_state.is_kerned else "Original (Unkerned)"
     st.write(f"Currently viewing: **{status}**")
+    
     st.markdown('<textarea class="tester-box">AV TA To Tr We Wa P. Y- Type here...</textarea>', unsafe_allow_html=True)
 
     st.subheader("Kerning Controls")
