@@ -35,6 +35,16 @@ def inject_pro_cleaner():
     }
     </style>
     """, unsafe_allow_html=True)
+
+# Force-remove the footer using HTML injection
+st.markdown("""
+    <script>
+        const footer = document.querySelector('footer');
+        if (footer) footer.style.display = 'none';
+        const fsButton = document.querySelector('button[title="View fullscreen"]');
+        if (fsButton) fsButton.style.display = 'none';
+    </script>
+""", unsafe_allow_html=True)
     
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
