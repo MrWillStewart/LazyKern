@@ -10,32 +10,30 @@ from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 def inject_pro_cleaner():
     st.markdown("""
     <style>
-    /* Nuke the 'Built with Streamlit' footer */
+    /* Nuke Branding for both Local and Embedded modes */
     [data-testid="stAppFooter"], 
-    footer { 
+    footer,
+    #MainMenu, 
+    [data-testid="stHeader"],
+    div[data-testid="stBottom"],
+    .viewerBadge_container__1QSob,
+    .styles_viewerBadge__1yB5_ { 
         display: none !important; 
     }
     
-    /* Nuke the fullscreen button at bottom right */
-    [data-testid="StyledFullScreenButton"], 
+    /* Force-hide the Fullscreen button in embed mode */
     button[title="View fullscreen"],
-    .st-emotion-cache-1rqvspb { 
+    [data-testid="StyledFullScreenButton"] { 
         display: none !important; 
     }
 
-    /* Nuke the top-right menu */
-    #MainMenu, 
-    [data-testid="stHeader"] { 
-        display: none !important; 
-    }
-    
-    /* Prevent the footer container from taking up layout space */
-    div[data-testid="stBottom"] {
+    /* Target the specific Streamlit embed badge */
+    #root > div:nth-child(2) {
         display: none !important;
     }
     </style>
     """, unsafe_allow_html=True)
-
+    
 # Force-remove the footer using HTML injection
 st.markdown("""
     <script>
