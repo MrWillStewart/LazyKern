@@ -3,83 +3,107 @@ import io
 import time
 import base64
 from fontTools.ttLib import TTFont
-from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
-from fontTools.pens.boundsPen import BoundsPen # Added this to fix the error
+from fontTools.pens.basePen import BasePen
+from fontTools.pens.boundsPen import BoundsPen
+import math
 
-# --- 1. TYPOGRAPHIC HEURISTIC ENGINE ---
-def classify_glyph(font, glyph_set, name):
-    """Accurately determines if a glyph is 'Straight' or 'Round'."""
-    glyph = glyph_set[name]
-    width = glyph.width
-    if width == 0: return "other"
-    
-    # Use BoundsPen to safely calculate bounding box
-    bp = BoundsPen(glyph_set)
-    glyph.draw(bp)
-    
-    # If the pen didn't find any bounds (empty glyph), return early
-    if not bp.bounds: return "other"
-    
-    min_x, _, max_x, _ = bp.bounds
-    
-    # Heuristic: If it hits the edges, it's a straight stem
-    is_left_straight = min_x < (width * 0.15)
-    is_right_straight = max_x > (width * 0.85)
-    
-    if is_left_straight and is_right_straight: return "straight_both"
-    if is_left_straight: return "straight_left"
-    if is_right_straight: return "straight_right"
-    return "round"
+# --- 1. GEOMETRY ENGINE ---
+class ProfilePen(BasePen):
+    def __init__(self, glyph_set):
+        super().__init__(glyph_set)
+        self.points = []
+    def _moveTo(self, p): self.points.append(p)
+    def _lineTo(self, p):
+        p0 = self._getCurrentPoint()
+        if p0:
+            dist = math.dist(p0, p)
+            steps = max(1, int(dist / 10.0))
+            for i in range(steps + 1):
+                t = i / float(steps)
+                self.points.append((p0[0] + (p[0] - p0[0]) * t, p0[1] + (p[1] - p0[1]) * t))
+    def _curveToOne(self, p1, p2, p3):
+        p0 = self._getCurrentPoint()
+        if not p0: return
+        steps = 5
+        for i in range(steps + 1):
+            t = i / float(steps)
+            x = (1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]
+            y = (1-t)**3 * p0[1] + 3*(1-t)**2 * t * p1[1] + 3*(1-t) * t**2 * p2[1] + t**3 * p3[1]
+            self.points.append((x, y))
+    def _qCurveToOne(self, p1, p2):
+        p0 = self._getCurrentPoint()
+        if not p0: return
+        steps = 5
+        for i in range(steps + 1):
+            t = i / float(steps)
+            x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
+            y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
+            self.points.append((x, y))
 
-def generate_kerning_rules(font, gap_strength):
+def get_glyph_profiles(font):
     glyph_set = font.getGlyphSet()
-    glyph_order = font.getGlyphOrder()
-    
-    # Pre-classify all glyphs
-    classes = {name: classify_glyph(font, glyph_set, name) for name in glyph_order if name not in {'.notdef', 'space'}}
-    
+    ignore = {'.notdef', 'space', 'null', 'CR', 'nonmarkingreturn'}
+    profiles = {}
+    for name in font.getGlyphOrder():
+        if name in ignore: continue
+        pen = ProfilePen(glyph_set)
+        try: glyph_set[name].draw(pen)
+        except: continue
+        if not pen.points: continue
+        
+        # Use BoundsPen for width/bounding box
+        bp = BoundsPen(glyph_set)
+        glyph_set[name].draw(bp)
+        
+        profiles[name] = {
+            "points": pen.points, 
+            "width": glyph_set[name].width,
+            "min_x": bp.bounds[0] if bp.bounds else 0,
+            "max_x": bp.bounds[2] if bp.bounds else 0
+        }
+    return profiles
+
+def calculate_kerning(profiles, target_gap):
+    # Only iterate over the main character set to keep it fast
+    keys = list(profiles.keys())
     kern_pairs = {}
     
-    # Apply standard Type Design Rules
-    for left in classes:
-        for right in classes:
-            l_type = classes[left]
-            r_type = classes[right]
-            
-            # Base logic: Straight-Straight (H-H) needs tighter kerning
-            # Round-Round (O-O) needs looser kerning to avoid collision
-            adjustment = 0
-            
-            if l_type == "straight_right" and r_type == "straight_left":
-                adjustment = -20
-            elif l_type == "straight_right" or r_type == "straight_left":
-                adjustment = -10
-            elif l_type == "round" and r_type == "round":
-                adjustment = 10
-            
-            # Factor in the user's "Kerning Strength" slider
-            final_val = adjustment + gap_strength
-            
-            if final_val != 0:
-                kern_pairs[(left, right)] = int(final_val)
+    # Simple collision detection: If points get closer than target_gap, adjust
+    for left in keys:
+        for right in keys:
+            # Simple bounding box pre-check
+            if (profiles[right]["min_x"] + profiles[left]["width"]) > (profiles[left]["max_x"] + target_gap + 100):
+                continue
                 
+            needed_kern = target_gap - 100
+            for lx, ly in profiles[left]["points"]:
+                for rx, ry in profiles[right]["points"]:
+                    if abs(ly - ry) < 5: # Only check collision on the same Y-plane
+                        dist = (rx + profiles[left]["width"]) - lx
+                        if dist < target_gap:
+                            needed_kern = max(needed_kern, target_gap - dist)
+            
+            if needed_kern > 5:
+                kern_pairs[(left, right)] = int(round(needed_kern / 5.0) * 5)
     return kern_pairs
 
 # --- 2. STREAMLIT UI ---
-st.set_page_config(page_title="LazyKern Pro", layout="wide")
-st.title("LazyKern: Metrics-Based Kerning")
+st.set_page_config(page_title="LazyKern Classic", layout="wide")
+st.title("LazyKern: The Collision Engine")
 uploaded_file = st.file_uploader("Upload Font", type=["ttf", "otf"])
 
 if uploaded_file:
     font = TTFont(io.BytesIO(uploaded_file.read()))
-    strength = st.slider("Kerning Strength (Adjust tightness)", -50, 50, 0, 5)
+    gap = st.slider("Target Gap (Pixels)", 10, 100, 60, 5)
     
-    if st.button("Apply Typographic Rules"):
-        with st.spinner("Analyzing metrics..."):
-            kern_pairs = generate_kerning_rules(font, strength)
-            
-            # Apply to font
-            fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
+    if st.button("Run Physical Collision"):
+        with st.spinner("Simulating letter collisions..."):
+            profiles = get_glyph_profiles(font)
+            kern_pairs = calculate_kerning(profiles, gap)
+        
+        from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+        if kern_pairs:
+            fea = ["feature kern {"] + [f"    pos {l} {r} {-v};" for (l, r), v in kern_pairs.items()] + ["} kern;"]
             addOpenTypeFeaturesFromString(font, "\n".join(fea))
         
         out = io.BytesIO()
@@ -89,14 +113,14 @@ if uploaded_file:
         unique_id = int(time.time())
         b64 = base64.b64encode(font_data).decode('utf-8')
         
-        st.success(f"Applied {len(kern_pairs)} automated rules.")
+        st.success(f"Successfully generated {len(kern_pairs)} kern pairs.")
         
         st.markdown(f"""
         <style>
         @font-face {{ font-family: 'LiveFont_{unique_id}'; src: url('data:font/ttf;charset=utf-8;base64,{b64}'); }}
         .tester {{ font-family: 'LiveFont_{unique_id}', sans-serif; font-size: 64px; width: 100%; border: 2px solid #ccc; padding: 20px; border-radius: 8px; background: white; color: black; }}
         </style>
-        <textarea class="tester">HNHI OCO OHO</textarea>
+        <textarea class="tester" placeholder="Type here...">HNHI OCO OHO</textarea>
         """, unsafe_allow_html=True)
         
-        st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
+        st.download_button("Download", font_data, f"kerned_{uploaded_file.name}")
