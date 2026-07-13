@@ -71,6 +71,7 @@ def get_glyph_profiles(font):
 
 def calculate_kerning(profiles, target_gap):
     kern_pairs = {}
+    ABS_SAFE_CLEARANCE = 30 # The "Hardline" - never let glyphs get closer than this
     keys = list(profiles.keys())
     
     for left in keys:
@@ -82,14 +83,30 @@ def calculate_kerning(profiles, target_gap):
             
             cat_l, cat_r = get_optical_category(left), get_optical_category(right)
             
+            # 1. OPTICAL TUCKING LOGIC
             offset = 0
-            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION': offset = -40 
-            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG': offset = -15
-            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT': offset = 10
-            elif cat_l == 'ROUND' and cat_r == 'ROUND': offset = -10
+            if cat_l == 'DIAGONAL_OVERHANG' and cat_r == 'PUNCTUATION':
+                offset = -50 # Aggressive tuck
+            elif cat_l == 'PUNCTUATION' and cat_r == 'DIAGONAL_OVERHANG':
+                offset = -10
+            elif cat_l == 'STRAIGHT' and cat_r == 'STRAIGHT':
+                offset = 10
+            elif cat_l == 'ROUND' and cat_r == 'ROUND':
+                offset = -10
             
+            # 2. SAFETY LAYER (The Fix)
+            # Calculate base distance
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
+            
+            # Proposed kerning
             kern_val = int((target_gap + offset) - min_dist)
+            
+            # Enforce Hardline: If the resulting space is less than the clearance, push back
+            for y in common_ys:
+                projected_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
+                if projected_space < ABS_SAFE_CLEARANCE:
+                    compensation = ABS_SAFE_CLEARANCE - projected_space
+                    kern_val += int(math.ceil(compensation))
             
             if abs(kern_val) > 2:
                 kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
@@ -117,7 +134,6 @@ if uploaded_file:
     font_data = out.getvalue()
     b64 = base64.b64encode(font_data).decode('utf-8')
     
-    # CSS injection to force the font into the text_area
     st.markdown(f"""
         <style>
         @font-face {{ font-family: 'LiveFont'; src: url('data:font/ttf;base64,{b64}'); }}
@@ -131,5 +147,4 @@ if uploaded_file:
     """, unsafe_allow_html=True)
     
     st.text_area("Test your kerning here:", value="T. Y. P. V. A. O. H. | T Y P V A", key="tester")
-    
     st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
