@@ -1,10 +1,11 @@
 import streamlit as st
 import io
-import math
 import base64
+import time
 from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+import math
 
 # --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
@@ -41,18 +42,14 @@ class ProfilePen(BasePen):
 
 def get_glyph_profiles(font):
     glyph_set = font.getGlyphSet()
-    # List of glyphs to ignore (structural/invisible)
     ignore = {'.notdef', 'space', 'null', 'CR', 'nonmarkingreturn'}
-    
     profiles = {}
     for name in font.getGlyphOrder():
         if name in ignore: continue
-        
         pen = ProfilePen(glyph_set)
         try: glyph_set[name].draw(pen)
         except: continue
         if not pen.points: continue
-        
         xs = [p[0] for p in pen.points]
         profiles[name] = {
             "points": pen.points, 
@@ -62,21 +59,16 @@ def get_glyph_profiles(font):
     return profiles
 
 def calculate_kerning(profiles, target_gap=60):
-    # Dynamically build pairs from the detected profiles
     glyph_list = list(profiles.keys())
     pairs_to_kern = [(a, b) for a in glyph_list for b in glyph_list]
-    
     kern_pairs = {}
     total_pairs = len(pairs_to_kern)
     progress_bar = st.progress(0)
-    
     for i, (left, right) in enumerate(pairs_to_kern):
         if i % 100 == 0: progress_bar.progress(i / total_pairs)
-        
-        # Culling
+        if left not in profiles or right not in profiles: continue
         if (profiles[right]["min_x"] + profiles[left]["advance"]) > (profiles[left]["max_x"] + target_gap + 40):
             continue
-            
         needed_kern = target_gap - 100
         for lx, ly in profiles[left]["points"]:
             for rx, ry in profiles[right]["points"]:
@@ -84,10 +76,8 @@ def calculate_kerning(profiles, target_gap=60):
                     dist = (rx + profiles[left]["advance"]) - lx
                     if dist < target_gap:
                         needed_kern = max(needed_kern, target_gap - dist)
-        
         if needed_kern > 5:
             kern_pairs[(left, right)] = int(round(needed_kern / 5.0) * 5)
-            
     progress_bar.empty()
     return kern_pairs
 
@@ -101,9 +91,8 @@ if uploaded_file:
     gap = st.slider("Target Gap", 10, 100, 60, 5)
     
     if st.button("Generate & Optimize"):
-        with st.spinner("Analyzing your font glyphs..."):
+        with st.spinner("Analyzing glyphs and calculating kerning..."):
             profiles = get_glyph_profiles(font)
-            st.write(f"Detected {len(profiles)} printable glyphs.")
             kern_pairs = calculate_kerning(profiles, target_gap=gap)
         
         if kern_pairs:
@@ -112,5 +101,33 @@ if uploaded_file:
         
         out = io.BytesIO()
         font.save(out)
-        st.success("Kerning Applied to detected glyphs!")
-        st.download_button("Download", out.getvalue(), f"kerned_{uploaded_file.name}")
+        font_data = out.getvalue()
+        
+        # Unique ID for the font to force browser cache bypass
+        unique_id = int(time.time())
+        b64 = base64.b64encode(font_data).decode('utf-8')
+        
+        st.success(f"Generated {len(kern_pairs)} kerning pairs!")
+        
+        # Display Preview
+        st.markdown(f"""
+        <style>
+        @font-face {{
+            font-family: 'LiveFont_{unique_id}'; 
+            src: url('data:font/ttf;charset=utf-8;base64,{b64}');
+        }}
+        .tester {{
+            font-family: 'LiveFont_{unique_id}', sans-serif; 
+            font-size: 64px; 
+            width: 100%; 
+            border: 2px solid #ccc; 
+            padding: 20px; 
+            border-radius: 8px;
+            background: white;
+            color: black;
+        }}
+        </style>
+        <textarea class="tester" placeholder="Type here to test...">AVAW ST GR TEST</textarea>
+        """, unsafe_allow_html=True)
+        
+        st.download_button("Download Kerned Font", font_data, f"kerned_{uploaded_file.name}")
