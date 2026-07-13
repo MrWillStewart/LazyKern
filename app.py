@@ -6,6 +6,7 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
+# --- 0. BRANDING STRIPPER & TYPOGRAPHY ENFORCER ---
 def inject_pro_cleaner():
     st.markdown("""
     <style>
@@ -17,9 +18,20 @@ def inject_pro_cleaner():
     h1, h2, h3, h4, label, .stMarkdown p {
         font-family: 'Departure Mono', monospace !important;
     }
+    /* Injecting your class into the Streamlit input area */
+    .stTextArea textarea {
+        font-family: 'LiveFont', sans-serif !important;
+        font-size: 48px !important;
+        min-height: 140px !important;
+        border: 1px solid #DAE1E8 !important;
+        border-radius: 10px !important;
+        color: #000000 !important;
+        line-height: 1.2 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
+# --- 1. CORE GEOMETRY ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
@@ -67,7 +79,11 @@ def get_glyph_profiles(font, step_size=5):
         for x, y in pen.points:
             y_slice = int(round(y / step_size) * step_size)
             slices.setdefault(y_slice, []).append(x)
-        profiles[name] = {"left": {y: min(x) for y, x in slices.items()}, "right": {y: max(x) for y, x in slices.items()}, "advance": glyph_set[name].width}
+        left_prof, right_prof = {}, {}
+        for y_slice, x_vals in slices.items():
+            left_prof[y_slice] = min(x_vals)
+            right_prof[y_slice] = max(x_vals)
+        profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph_set[name].width}
     return profiles
 
 def get_optical_class(name):
@@ -86,8 +102,8 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
         prof_l, prof_r = profiles[left]["right"], profiles[right]["left"]
         common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
         if not common_ys: continue
-        mod = 0
         cl, cr = get_optical_class(left), get_optical_class(right)
+        mod = 0
         if cl == 'STRAIGHT' and cr == 'STRAIGHT': mod = 15
         elif cl == 'ROUND' and cr == 'ROUND': mod = -10
         elif (cl == 'DIAGONAL_OPEN' and cr == 'PUNCTUATION') or (cl == 'PUNCTUATION' and cr == 'DIAGONAL_OPEN'): mod = -15
@@ -101,6 +117,7 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
         if abs(kern_val) > 2: kern_pairs[(left, right)] = int(round(kern_val / 5.0) * 5)
     return kern_pairs
 
+# --- 2. STREAMLIT RUNTIME ---
 st.set_page_config(page_title="LazyKern", layout="centered")
 inject_pro_cleaner()
 st.title("LazyKern")
@@ -109,14 +126,16 @@ uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 if uploaded_file:
     if "filename" not in st.session_state or st.session_state.filename != uploaded_file.name:
         font_bytes = uploaded_file.read()
-        font = TTFont(io.BytesIO(font_bytes))
         st.session_state.original_bytes = font_bytes
         st.session_state.filename = uploaded_file.name
+        font = TTFont(io.BytesIO(font_bytes))
         st.session_state.profiles = get_glyph_profiles(font)
-        st.session_state.supported = {chr(cp) for cp in font.getBestCmap().keys()}
-        st.session_state.pairs = [(a, b) for a in st.session_state.profiles for b in st.session_state.profiles]
+        # Identify supported characters
+        st.session_state.supported_chars = {chr(cp) for cp in font.getBestCmap().keys()}
+        glyphs = [g for g in st.session_state.profiles.keys() if g not in [".notdef", "space"]]
+        st.session_state.pairs = [(a, b) for a in glyphs for b in glyphs]
 
-    gap = st.slider("Target Gap", 10, 100, 60, 5)
+    gap = st.slider("Target Gap (Tightness)", 10, 100, 60, 5)
     use_kerning = st.toggle("Apply Auto-Kerning", True)
     
     bytes_data = st.session_state.original_bytes
@@ -129,17 +148,20 @@ if uploaded_file:
         font.save(out)
         bytes_data = out.getvalue()
 
-    b64 = base64.b64encode(bytes_data).decode()
+    b64 = base64.b64encode(bytes_data).decode('utf-8')
     fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
-    st.markdown(f"""<style>@font-face {{font-family:'LiveFont'; src:url('data:font/{fmt};base64,{b64}');}} 
-    .tbox {{font-family:'LiveFont'; font-size:48px; width:100%; height:140px; padding:15px; border:1px solid #ccc; border-radius:10px;}}</style>""", unsafe_allow_html=True)
+    st.markdown(f"""<style>@font-face {{font-family:'LiveFont'; src:url('data:font/{fmt};charset=utf-8;base64,{b64}');}}</style>""", unsafe_allow_html=True)
 
-    # Sanitize input: Replace the static HTML with this logic
-    user_input = st.text_area("Live Preview", value="START.YOUR.ENGINES.", key="user_text")
-    clean = "".join([c for c in user_input if c in st.session_state.supported or c in [" ", "\n", "."]])
+    # --- INPUT WITH SANITIZATION ---
+    if "user_text" not in st.session_state: st.session_state.user_text = "START.YOUR.ENGINES."
+    
+    user_input = st.text_area("Live Preview", value=st.session_state.user_text, key="input_key")
+    
+    # Filter function
+    clean = "".join([c for c in user_input if c in st.session_state.supported_chars or c in [" ", "\n", "."]])
+    
     if user_input != clean:
         st.session_state.user_text = clean
         st.rerun()
 
-    st.markdown(f'<div class="tbox">{clean}</div>', unsafe_allow_html=True)
-    st.download_button("📥 Download", bytes_data, f"kerned_{uploaded_file.name}")
+    st.download_button("📥 Download Kerned Font File", bytes_data, f"kerned_{uploaded_file.name}")
