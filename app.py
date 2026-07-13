@@ -6,7 +6,7 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
-# --- 0. BRANDING STRIPPER ---
+# --- 0. UI SETUP ---
 def inject_pro_cleaner():
     st.markdown("""
     <style>
@@ -26,8 +26,7 @@ class ProfilePen(BasePen):
         p0 = self._getCurrentPoint()
         if p0:
             dist = math.dist(p0, p)
-            # High-density sampling to prevent collisions on narrow/slanted lines
-            steps = max(2, int(dist / 2.0)) 
+            steps = max(2, int(dist / 2.0))
             for i in range(steps + 1):
                 t = i / float(steps)
                 self.points.append((p0[0] + (p[0] - p0[0]) * t, p0[1] + (p[1] - p0[1]) * t))
@@ -36,7 +35,7 @@ class ProfilePen(BasePen):
     def _curveToOne(self, p1, p2, p3):
         p0 = self._getCurrentPoint()
         if not p0: return
-        steps = 20 # Increased resolution
+        steps = 20
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]
@@ -53,7 +52,7 @@ class ProfilePen(BasePen):
             y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
             self.points.append((x, y))
 
-def get_glyph_profiles(font, step_size=2): # High-res profiling
+def get_glyph_profiles(font):
     glyph_set = font.getGlyphSet()
     profiles = {}
     for name in glyph_set.keys():
@@ -61,48 +60,38 @@ def get_glyph_profiles(font, step_size=2): # High-res profiling
         try: glyph_set[name].draw(pen)
         except: continue
         if not pen.points: continue
-        
-        # We store every point to allow for perfect overlap detection
-        # No more rounding/slicing which causes jagged collision gaps
         profiles[name] = {"points": pen.points, "advance": glyph_set[name].width}
     return profiles
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    
     for left, right in pairs_to_kern:
         if left not in profiles or right not in profiles: continue
         
-        # Collision simulation: brute force check of all point interactions
         points_l = profiles[left]["points"]
         advance_l = profiles[left]["advance"]
         points_r = profiles[right]["points"]
         
-        # We shift right glyph by 'kern' until no points overlap
-        # Check every point of R against every point of L
-        # This is expensive but ensures 0% overlap
-        current_kern = target_gap - 100 # Start very tight
+        current_kern = target_gap - 100
+        # SAFETY LIMIT: Stop the loop if we push too far (prevents infinite hanging)
+        safety_limit = 0
         
-        while True:
+        while safety_limit < 50:
             collision = False
             for lx, ly in points_l:
-                # Shift R points by the current advance + kern
                 for rx, ry in points_r:
-                    # If Y coordinates are close, check X distance
                     if abs(ly - ry) < 5: 
                         if (rx + advance_l + current_kern) - lx < 10:
                             collision = True
                             break
                 if collision: break
             
-            if not collision:
-                break
-            else:
-                current_kern += 5 # Push apart until clear
+            if not collision: break
+            current_kern += 5
+            safety_limit += 1
         
         if abs(current_kern) > 2:
             kern_pairs[(left, right)] = int(round(current_kern / 5.0) * 5)
-            
     return kern_pairs
 
 # --- 2. STREAMLIT RUNTIME ---
@@ -112,7 +101,8 @@ inject_pro_cleaner()
 st.title("LazyKern Pro")
 uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 
-if uploaded_file:
+# Only proceed if a file exists
+if uploaded_file is not None:
     font_bytes = uploaded_file.read()
     font = TTFont(io.BytesIO(font_bytes))
     
@@ -121,7 +111,6 @@ if uploaded_file:
         glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
         pairs = [(a, b) for a in glyphs for b in glyphs]
         
-        # Simplified slider: The logic now handles collisions automatically
         kern_pairs = calculate_kerning(profiles, pairs, target_gap=60)
         
         if kern_pairs:
@@ -133,4 +122,10 @@ if uploaded_file:
         active_bytes = out.getvalue()
 
     st.success("Simulation Complete. Font kerning enforced.")
+    
+    b64 = base64.b64encode(active_bytes).decode('utf-8')
+    st.markdown(f"""<style>@font-face {{font-family: 'LiveFont'; src: url('data:font/ttf;charset=utf-8;base64,{b64}');}} .tester {{font-family: 'LiveFont'; font-size: 48px; width: 100%; border: 1px solid #ccc; padding: 10px;}}</style>""", unsafe_allow_html=True)
+    st.markdown('<textarea class="tester">AVAW ST GR TEST.</textarea>', unsafe_allow_html=True)
     st.download_button("Download Kerned Font", active_bytes, f"kerned_{uploaded_file.name}")
+else:
+    st.info("Upload a font to start the geometry analysis.")
