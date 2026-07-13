@@ -28,12 +28,28 @@ class ProfilePen(BasePen):
         super().__init__(glyph_set)
         self.points = []
 
-    def _moveTo(self, p): self.points.append(p)
-    def _lineTo(self, p): self.points.append(p)
+    def _moveTo(self, p): 
+        self.points.append(p)
+
+    def _lineTo(self, p):
+        # THE FIX: Force high-density point sampling on straight lines
+        p0 = self._getCurrentPoint()
+        if p0:
+            dist = math.dist(p0, p)
+            steps = max(1, int(dist / 5.0)) # Inject a physical coordinate every 5 units
+            for i in range(steps + 1):
+                t = i / float(steps)
+                x = p0[0] + (p[0] - p0[0]) * t
+                y = p0[1] + (p[1] - p0[1]) * t
+                self.points.append((x, y))
+        else:
+            self.points.append(p)
+
     def _curveToOne(self, p1, p2, p3):
         p0 = self._getCurrentPoint()
+        if not p0: return
         approx_len = math.dist(p0, p1) + math.dist(p1, p2) + math.dist(p2, p3)
-        steps = max(8, min(30, int(approx_len / 20)))
+        steps = max(8, min(40, int(approx_len / 5.0)))
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]
@@ -42,15 +58,16 @@ class ProfilePen(BasePen):
 
     def _qCurveToOne(self, p1, p2):
         p0 = self._getCurrentPoint()
+        if not p0: return
         approx_len = math.dist(p0, p1) + math.dist(p1, p2)
-        steps = max(6, min(20, int(approx_len / 20)))
+        steps = max(6, min(30, int(approx_len / 5.0)))
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
             y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
             self.points.append((x, y))
 
-def get_glyph_profiles(font, step_size=10):
+def get_glyph_profiles(font, step_size=5): # Tightened slice resolution from 10 to 5
     glyph_set = font.getGlyphSet()
     profiles = {}
     for name in glyph_set.keys():
@@ -87,13 +104,6 @@ def get_optical_class(glyph_name):
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
     kern_pairs = {}
-    
-    # ---------------------------------------------------------
-    # HARDLINE BOUNDARY (In Font Units)
-    # This is the absolute minimum distance outlines can sit next to 
-    # each other without triggering the overlap protocol. 
-    # At 25, it guarantees zero physical contour intersections.
-    # ---------------------------------------------------------
     ABS_SAFE_CLEARANCE = 25 
 
     # --- PHASE 1: ADJACENT PAIR CALCULATION ---
@@ -116,16 +126,10 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
                 optical_modifier -= 15
             
             adjusted_target = target_gap + optical_modifier
-            
-            # Base geometric offset logic
             min_dist = min((prof_r[y] + profiles[left]["advance"]) - prof_l[y] for y in common_ys)
             kern_val = int(adjusted_target - min_dist)
             
             # --- THE HARDLINE ANTI-OVERLAP SWEEP ---
-            # Every slice is checked. If 'kern_val' pushes any geometry 
-            # closer than ABS_SAFE_CLEARANCE, it calculates exactly 
-            # how far it needs to backtrack to hit the safe zone, 
-            # and permanently overrides the kerning.
             max_adjacent_compensation = 0
             for y in common_ys:
                 projected_space = (prof_r[y] + profiles[left]["advance"] + kern_val) - prof_l[y]
@@ -134,7 +138,6 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap=60):
                     if compensation > max_adjacent_compensation:
                         max_adjacent_compensation = compensation
             
-            # Applying the correction mathematically
             if max_adjacent_compensation > 0:
                 kern_val += int(math.ceil(max_adjacent_compensation))
 
@@ -188,7 +191,7 @@ uploaded_file = st.file_uploader("Upload Font (TTF/OTF)", type=["ttf", "otf"])
 
 if uploaded_file:
     if "filename" not in st.session_state or st.session_state.filename != uploaded_file.name:
-        with st.spinner("Analyzing font geometry profiles..."):
+        with st.spinner("Analyzing high-density geometry profiles..."):
             font_bytes = uploaded_file.read()
             st.session_state.original_bytes = font_bytes
             st.session_state.filename = uploaded_file.name
@@ -242,7 +245,7 @@ if uploaded_file:
     """, unsafe_allow_html=True)
 
     st.subheader("Live Preview")
-    st.markdown('<textarea class="tester-box">AVAW ST TEST.</textarea>', unsafe_allow_html=True)
+    st.markdown('<textarea class="tester-box">AVAW ST GR TEST.</textarea>', unsafe_allow_html=True)
 
     st.download_button(
         label="📥 Download Kerned Font File", 
