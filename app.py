@@ -100,11 +100,9 @@ font_css_injection = ""
 font_family_name = "sans-serif"
 
 if uploaded_file:
-    # Read file bytes for processing and live injection
     file_bytes = uploaded_file.read()
-    uploaded_file.seek(0) # reset stream position
+    uploaded_file.seek(0)
     
-    # Generate data URI for embedding font in html iframe
     b64_font = base64.b64encode(file_bytes).decode('utf-8')
     font_format = "opentype" if uploaded_file.name.endswith('.otf') else "truetype"
     font_family_name = "UploadedCustomFont"
@@ -118,7 +116,8 @@ if uploaded_file:
     }}
     """
     
-    gap = st.slider("Target Gap Distance", min_value=10, max_width=100, value=40, step=5)
+    # FIXED ARGUMENT HERE: max_width changed to max_value
+    gap = st.slider("Target Gap Distance", min_value=10, max_value=100, value=40, step=5)
     
     if st.button("Analyze & Process Font"):
         with st.spinner("Executing geometric matrix scan..."):
