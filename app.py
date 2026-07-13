@@ -14,7 +14,7 @@ def inject_pro_cleaner():
     [data-testid="stHeader"] { display: none !important; }
     #MainMenu { display: none !important; }
     
-    /* Hide 'Built with Streamlit' Footers (Covers multiple Streamlit versions) */
+    /* Hide 'Built with Streamlit' Footers */
     footer { display: none !important; }
     [data-testid="stBottom"] { display: none !important; }
     [data-testid="stAppFooter"] { display: none !important; }
@@ -22,7 +22,6 @@ def inject_pro_cleaner():
     /* Hide Full-Screen Toggles on Hover */
     button[title="View fullscreen"] { display: none !important; }
     [data-testid="StyledFullScreenButton"] { display: none !important; }
-    .st-emotion-cache-1rqvspb { display: none !important; } /* Fallback for fullscreen icon */
 
     /* Hide Link Anchors on Headers */
     .header-anchor { display: none !important; }
