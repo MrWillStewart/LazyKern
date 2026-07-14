@@ -84,7 +84,6 @@ def analyze_profile_zones(profile_dict, is_left_side):
     x_spread = max(profile_dict.values()) - min(profile_dict.values())
     if x_spread < h * 0.08: return "STRAIGHT"
     
-    # Check for "Waisted" (narrow in middle)
     if not is_left_side:
         if m_x < t_x - x_spread * 0.15 and m_x < b_x - x_spread * 0.15: return "WAISTED"
         if t_x > m_x + x_spread * 0.15 and t_x > b_x + x_spread * 0.15: return "OVERHANG_TOP"
@@ -101,89 +100,131 @@ def analyze_profile_zones(profile_dict, is_left_side):
         if t_x < b_x - x_spread * 0.15 and m_x < b_x: return "SLOPE_IN"
     return "STRAIGHT"
 
-def get_glyph_profiles(font, step_size=5):
+def apply_global_tracking(font, tracking_value):
+    """ Adjusts the fundamental advance width of every glyph before profiling. """
+    if tracking_value == 0: return font
+    hmtx = font['hmtx']
+    for glyph_name in hmtx.metrics.keys():
+        width, lsb = hmtx.metrics[glyph_name]
+        hmtx.metrics[glyph_name] = (max(0, width + tracking_value), lsb)
+    return font
+
+def get_glyph_profiles(font):
+    # Adaptive Step Sizing
+    head = font['head']
+    upm_height = head.yMax - head.yMin
+    step_size = max(1, int(upm_height / 150.0)) # Guarantees roughly 150 slices per font height
+
     glyph_set = font.getGlyphSet()
     profiles = {}
+    total_w, total_h, count = 0, 0, 0
+    
     for name in glyph_set.keys():
         pen = ProfilePen(glyph_set)
         try: glyph_set[name].draw(pen)
         except Exception: continue
         if not pen.points: continue
+        
         slices = {}
         ys_raw = []
         for x, y in pen.points:
             ys_raw.append(y)
             y_slice = int(round(y / step_size) * step_size)
             slices.setdefault(y_slice, []).append(x)
+            
         left_prof = {y: min(x_vals) for y, x_vals in slices.items()}
         right_prof = {y: max(x_vals) for y, x_vals in slices.items()}
+        
+        adv = glyph_set[name].width
+        h = max(ys_raw) - min(ys_raw) if ys_raw else 0
+        
         profiles[name] = {
-            "left": left_prof, "right": right_prof,
-            "advance": glyph_set[name].width,
-            "height": max(ys_raw) - min(ys_raw) if ys_raw else 0,
+            "left": left_prof, 
+            "right": right_prof, 
+            "advance": adv,
+            "height": h,
             "shape_left": analyze_profile_zones(left_prof, True),
             "shape_right": analyze_profile_zones(right_prof, False)
         }
-    return profiles
+        
+        if name not in [".notdef", "space"] and h > 0:
+            total_w += adv
+            total_h += h
+            count += 1
+            
+    font_avg_w = total_w / count if count > 0 else 500
+    font_avg_h = total_h / count if count > 0 else 700
+    return profiles, font_avg_w, font_avg_h
 
-def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode):
-    # Config setup
+def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode, font_avg_w, font_avg_h):
     cfg = {"Open": (25, 0.22, 120), "Standard": (15, 0.30, 180), "Deep": (5, 0.45, 280)}
-    min_clearance, safe_ratio, max_cap = cfg.get(overhang_mode, cfg["Standard"])
     
     kern_pairs = {}
     for left, right in pairs_to_kern:
         if left not in profiles or right not in profiles: continue
         
         prof_l, prof_r = profiles[left]["right"], profiles[right]["left"]
-        adv_l = profiles[left]["advance"]
+        adv_l, adv_r = profiles[left]["advance"], profiles[right]["advance"]
         h_l, h_r = profiles[left]["height"], profiles[right]["height"]
         
         common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
         if not common_ys: continue
         
+        # Dual-Channel Overhang Router for Punctuation Safety
+        is_punct = (h_l < font_avg_h * 0.35) or (h_r < font_avg_h * 0.35)
+        effective_mode = "Standard" if (is_punct and overhang_mode == "Deep") else overhang_mode
+        min_clearance, safe_ratio, max_cap = cfg.get(effective_mode, cfg["Standard"])
+
         distances = {y: (prof_r[y] + adv_l) - prof_l[y] for y in common_ys}
         min_dist = min(distances.values())
+        
+        # White-Space Volume Analysis
+        avg_dist = sum(distances.values()) / len(distances)
+        trapped_volume = max(0, avg_dist - min_dist)
+        volume_allowance = -int(trapped_volume * 0.15) # Pull in by 15% of the trapped volume
         
         # Sharp/Point detection
         tolerance = 15
         bottleneck_slices = [y for y, d in distances.items() if d <= min_dist + tolerance]
-        is_sharp_contact = len(bottleneck_slices) <= max(2, int(len(common_ys) * 0.12))
-        sharp_modifier = -15 if is_sharp_contact else 0
+        num_slices = len(common_ys)
+        is_sharp_contact = len(bottleneck_slices) <= max(2, int(num_slices * 0.12))
+        sharp_modifier = -int(font_avg_w * 0.04) if is_sharp_contact else 0
         
-        # Optical Modifier logic
+        # Shape Modifiers
         shape_l, shape_r = profiles[left]["shape_right"], profiles[right]["shape_left"]
         opt = 0
         if shape_l == "WAISTED" or shape_r == "WAISTED": opt = -10
-        elif shape_l == "STRAIGHT" and shape_r == "STRAIGHT": opt = 15
+        elif shape_l == "STRAIGHT" and shape_r == "STRAIGHT": opt = int(target_gap * 0.25)
         elif shape_l == "ROUND" and shape_r == "ROUND": opt = -10
         elif (shape_l == "ROUND" and shape_r == "STRAIGHT") or (shape_l == "STRAIGHT" and shape_r == "ROUND"): opt = -5
         elif shape_l == "SLOPE_OUT" and shape_r == "SLOPE_IN": opt = -20
         elif shape_l == "SLOPE_IN" and shape_r == "SLOPE_OUT": opt = -20
         
-        # Dynamic Tuck
-        overlap_h = max(common_ys) - min(common_ys)
-        is_tucking = overlap_h < (h_l * 0.4) or overlap_h < (h_r * 0.4)
-        tuck_boost = 1.2 if is_tucking else 1.0
+        if is_punct: opt -= 10
+
+        adjusted_target = target_gap + opt + sharp_modifier + volume_allowance
+        kern_val = adjusted_target - min_dist
         
-        kern_val = (target_gap + opt + sharp_modifier) - min_dist
-        
-        # Safety guards
+        # Safety Guards
         actual_distance = min_dist + kern_val
         if actual_distance < min_clearance: kern_val += (min_clearance - actual_distance)
         
-        max_negative_kern = -abs(max(adv_l, profiles[right]["advance"]) * safe_ratio * tuck_boost)
+        overlap_h = max(common_ys) - min(common_ys)
+        is_tucking = overlap_h < (h_l * 0.4) or overlap_h < (h_r * 0.4)
+        base_adv = max(adv_l, adv_r) if is_tucking else min(adv_l, adv_r)
+        tuck_boost = 1.2 if is_tucking else 1.0
+            
+        max_negative_kern = -abs(base_adv * safe_ratio * tuck_boost)
         if abs(max_negative_kern) > max_cap: max_negative_kern = -max_cap
-        
         if kern_val < max_negative_kern: kern_val = max_negative_kern
         
         kern_val = int(round(kern_val / 5.0) * 5)
         if abs(kern_val) > 2: kern_pairs[(left, right)] = kern_val
             
     # Contextual Triplet Engine
-    punctuation_glyphs = [g for g in profiles.keys() if g in ["period", "comma", "colon", "semicolon", "dot", "commaaccent"] or (0 < profiles[g]["height"] < 350)]
-    overhanging_left = [g for g in profiles.keys() if profiles[g]["shape_right"] in ["OVERHANG_TOP", "SLOPE_IN", "ROUND"]]
-    overhanging_right = [g for g in profiles.keys() if profiles[g]["shape_left"] in ["OVERHANG_TOP", "SLOPE_OUT", "ROUND"]]
+    punctuation_glyphs = [g for g in profiles.keys() if g in ["period", "comma", "colon", "semicolon", "dot", "commaaccent"] or (0 < profiles[g]["height"] < font_avg_h * 0.35)]
+    overhanging_left = [g for g in profiles.keys() if profiles[g]["shape_right"] in ["OVERHANG_TOP", "SLOPE_IN", "ROUND", "WAISTED"]]
+    overhanging_right = [g for g in profiles.keys() if profiles[g]["shape_left"] in ["OVERHANG_TOP", "SLOPE_OUT", "ROUND", "WAISTED"]]
     
     contextual_rules = []
     for p in punctuation_glyphs:
@@ -193,20 +234,27 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode):
                 k_pr = kern_pairs.get((p, r), 0)
                 if k_lp == 0 and k_pr == 0: continue
                 
-                # Check clearance for triplets
                 if not profiles[p]["right"].keys(): continue
                 max_p_y = max(profiles[p]["right"].keys())
+                
                 prof_ll, prof_rr = profiles[l]["right"], profiles[r]["left"]
                 adv_ll, adv_pp = profiles[l]["advance"], profiles[p]["advance"]
                 
-                above_ys = [y for y in set(prof_ll.keys()).intersection(set(prof_rr.keys())) if y > max_p_y]
-                if not above_ys: continue
+                l_upper_ys = [y for y in prof_ll.keys() if y > max_p_y]
+                r_upper_ys = [y for y in prof_rr.keys() if y > max_p_y]
                 
-                min_clearance_above = min((prof_rr[y] + adv_ll + adv_pp + k_lp + k_pr) - prof_ll[y] for y in above_ys)
+                if not l_upper_ys or not r_upper_ys: continue
                 
-                if min_clearance_above < min_clearance + 15:
-                    needed_extra = int(round((min_clearance + 15 - min_clearance_above) / 5.0) * 5)
-                    if needed_extra > 5: contextual_rules.append(f"    pos {l} {p}' {needed_extra} {r};")
+                max_l_x_above = max([prof_ll[y] for y in l_upper_ys])
+                min_r_x_above = min([prof_rr[y] for y in r_upper_ys])
+                
+                projected_gap = (min_r_x_above + adv_ll + adv_pp + k_lp + k_pr) - max_l_x_above
+                safe_triplet_clearance = cfg.get(effective_mode, cfg["Standard"])[0] + 20
+                
+                if projected_gap < safe_triplet_clearance:
+                    needed_extra = int(round((safe_triplet_clearance - projected_gap) / 5.0) * 5)
+                    if needed_extra > 5:
+                        contextual_rules.append(f"    pos {l} {p}' {needed_extra} {r};")
 
     return kern_pairs, contextual_rules
 
@@ -218,36 +266,79 @@ st.title("LazyKern Auto-Kerning")
 uploaded_file = st.file_uploader("Drop your un-kerned Display Font (TTF/OTF)", type=["ttf", "otf"])
 
 if uploaded_file:
+    # State Sanitizer (Triggers when a new file is uploaded)
     if "filename" not in st.session_state or st.session_state.filename != uploaded_file.name:
-        font_bytes = uploaded_file.read()
-        st.session_state.original_bytes = font_bytes
+        for key in list(st.session_state.keys()):
+            del st.session_state[key] # Full memory flush
         st.session_state.filename = uploaded_file.name
-        font = TTFont(io.BytesIO(font_bytes))
-        st.session_state.profiles = get_glyph_profiles(font)
-        glyphs = [g for g in st.session_state.profiles.keys() if g not in [".notdef", "space"]]
-        st.session_state.pairs = [(a, b) for a in glyphs for b in glyphs]
+        st.session_state.original_bytes = uploaded_file.read()
 
-    col1, col2 = st.columns([1, 1])
-    target_gap = col1.slider("Target Gap", 0, 150, 40, 5)
-    overhang_mode = col2.radio("Overhang", ["Open", "Standard", "Deep"], index=1, horizontal=True)
+    # Read clean base font
+    base_font = TTFont(io.BytesIO(st.session_state.original_bytes))
+    st.session_state.supported_chars = {chr(cp) for cp in base_font.getBestCmap().keys()}
+
+    st.markdown("---")
     
+    # UI Controls
+    st.markdown("**1. Global Foundation**")
+    global_tracking = st.slider("Global Spacing (Base Sidebearings)", -100, 200, 0, 5, help="Fixes naturally tight or loose font metrics before kerning begins.")
+    
+    st.markdown("**2. Kerning Physics**")
+    col1, col2 = st.columns([1, 1])
+    with col1: target_gap = st.slider("Target Gap", 0, 150, 40, 5)
+    with col2: overhang_mode = st.radio("Overhang Mode", ["Open", "Standard", "Deep"], index=1, horizontal=True)
+    
+    use_kerning = st.toggle("✨ Apply LazyKern", True)
+    
+    # Execution Pipeline
     bytes_data = st.session_state.original_bytes
-    if st.toggle("✨ Apply LazyKern", True):
-        font = TTFont(io.BytesIO(bytes_data))
-        k, rules = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, overhang_mode)
-        fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in k.items()] + rules + ["} kern;"]
+    if use_kerning:
+        working_font = TTFont(io.BytesIO(st.session_state.original_bytes))
         
-        try:
-            addOpenTypeFeaturesFromString(font, "\n".join(fea))
+        # 1. Apply Global Tracking to metrics table
+        working_font = apply_global_tracking(working_font, global_tracking)
+        
+        # 2. Extract accurate profiles with new tracking applied
+        profiles, font_avg_w, font_avg_h = get_glyph_profiles(working_font)
+        glyphs = [g for g in profiles.keys() if g not in [".notdef", "space"]]
+        pairs = [(a, b) for a in glyphs for b in glyphs]
+        
+        # 3. Calculate physics & context rules
+        k, rules = calculate_kerning(profiles, pairs, target_gap, overhang_mode, font_avg_w, font_avg_h)
+        
+        # 4. Compile OTF Features
+        if k or rules:
+            fea = ["feature kern {"]
+            for (l, r), v in k.items(): fea.append(f"    pos {l} {r} {v};")
+            for rule in rules: fea.append(rule)
+            fea.append("} kern;")
+            
+            try:
+                addOpenTypeFeaturesFromString(working_font, "\n".join(fea))
+                out = io.BytesIO()
+                working_font.save(out)
+                bytes_data = out.getvalue()
+            except Exception: st.error("Kerning compilation failed. The font might have conflicting tables.")
+    else:
+        # If toggled off, still show tracking adjustments if any exist
+        if global_tracking != 0:
+            working_font = TTFont(io.BytesIO(st.session_state.original_bytes))
+            working_font = apply_global_tracking(working_font, global_tracking)
             out = io.BytesIO()
-            font.save(out)
+            working_font.save(out)
             bytes_data = out.getvalue()
-        except: st.error("Compilation failed.")
 
     b64 = base64.b64encode(bytes_data).decode('utf-8')
     fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
     st.markdown(f"""<style>@font-face {{font-family:'LiveFont'; src:url('data:font/{fmt};charset=utf-8;base64,{b64}');}}</style>""", unsafe_allow_html=True)
 
+    st.markdown("---")
     if "user_text" not in st.session_state: st.session_state.user_text = "AUTO KERNED."
-    st.text_area("Test your typography:", value=st.session_state.user_text, key="input_key")
+    user_input = st.text_area("Test your typography:", value=st.session_state.user_text, key="input_key")
+    
+    clean = "".join([c for c in user_input if c in st.session_state.supported_chars or c in [" ", "\n", "."]])
+    if user_input != clean:
+        st.session_state.user_text = clean
+        st.rerun()
+
     st.download_button("📥 Download Compiled Font", bytes_data, f"LazyKern_{uploaded_file.name}")
