@@ -28,7 +28,7 @@ def inject_pro_cleaner():
         line-height: 1.2 !important;
         letter-spacing: normal !important;
     }
-    /* Hide Streamlit radio button visual clutter to make it look like a segmented control */
+    /* Hide Streamlit radio button visual clutter to make it look like a seamless selector */
     div[role="radiogroup"] { flex-direction: row; gap: 15px; }
     </style>
     """, unsafe_allow_html=True)
@@ -70,7 +70,6 @@ class ProfilePen(BasePen):
             self.points.append((x, y))
 
 def analyze_shape(profile_dict, is_left_side):
-    """ Dynamically determines if a side is STRAIGHT, ROUND, DIAGONAL, or COMPLEX """
     if len(profile_dict) < 4: return "STRAIGHT"
     
     ys = sorted(profile_dict.keys())
@@ -80,24 +79,19 @@ def analyze_shape(profile_dict, is_left_side):
     
     top_x, bot_x = profile_dict[top_y], profile_dict[bot_y]
     
-    # Sample the middle 40% of the glyph to find the "bulge" or "bridge"
     mid_ys = [y for y in ys if bot_y + height*0.3 < y < bot_y + height*0.7]
     if not mid_ys: return "STRAIGHT"
     
     mid_x_avg = sum(profile_dict[y] for y in mid_ys) / len(mid_ys)
     
-    # Calculate horizontal spread
     x_vals = list(profile_dict.values())
     x_spread = max(x_vals) - min(x_vals)
     
-    if x_spread < height * 0.12: 
-        return "STRAIGHT" # Very little horizontal movement
+    if x_spread < height * 0.12: return "STRAIGHT" 
         
     expected_mid_x = (top_x + bot_x) / 2.0
-    if abs(mid_x_avg - expected_mid_x) < x_spread * 0.25:
-        return "DIAGONAL" # Smooth, linear slope between top and bottom
+    if abs(mid_x_avg - expected_mid_x) < x_spread * 0.25: return "DIAGONAL" 
         
-    # Check for outward bulge (Roundness)
     if is_left_side and (mid_x_avg < top_x and mid_x_avg < bot_x): return "ROUND"
     if not is_left_side and (mid_x_avg > top_x and mid_x_avg > bot_x): return "ROUND"
         
@@ -131,11 +125,12 @@ def get_glyph_profiles(font, step_size=5):
         }
     return profiles
 
-def calculate_kerning(profiles, pairs_to_kern, target_gap, safety_mode):
-    # Unpack safety modes (min_clearance, safe_ratio)
-    if safety_mode == "Safe": min_clearance, safe_ratio = 30, 0.2
-    elif safety_mode == "Standard": min_clearance, safe_ratio = 15, 0.35
-    else: min_clearance, safe_ratio = 5, 0.5 # Aggressive
+def calculate_kerning(profiles, pairs_to_kern, target_gap, interlock_mode):
+    # 1. Map UI to the physics engine
+    if interlock_mode == "Standard": 
+        min_clearance, safe_ratio = 15, 0.35 
+    else: # "Deep Interlock"
+        min_clearance, safe_ratio = 5, 0.55 # Allows heavy overlapping/tucking
 
     kern_pairs = {}
     for left, right in pairs_to_kern:
@@ -151,24 +146,31 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, safety_mode):
         min_dist = min((prof_r[y] + adv_l) - prof_l[y] for y in common_ys)
         
         # --- APPLY DYNAMIC OPTICAL MODIFIERS ---
-        shape_l = profiles[left]["shape_right"] # Right edge of left letter
-        shape_r = profiles[right]["shape_left"] # Left edge of right letter
+        shape_l = profiles[left]["shape_right"]
+        shape_r = profiles[right]["shape_left"]
         
         optical_modifier = 0
-        if shape_l == "STRAIGHT" and shape_r == "STRAIGHT": optical_modifier = 15 # Push blocks apart
-        elif shape_l == "ROUND" and shape_r == "ROUND": optical_modifier = -10 # Tuck bowls together
+        if shape_l == "STRAIGHT" and shape_r == "STRAIGHT": optical_modifier = 15 
+        elif shape_l == "ROUND" and shape_r == "ROUND": optical_modifier = -10 
         elif (shape_l == "ROUND" and shape_r == "STRAIGHT") or (shape_l == "STRAIGHT" and shape_r == "ROUND"): optical_modifier = -5
-        elif shape_l == "DIAGONAL" or shape_r == "DIAGONAL": optical_modifier = -15 # Eat up diagonal whitespace
+        elif shape_l == "DIAGONAL" or shape_r == "DIAGONAL": optical_modifier = -15 
 
         adjusted_target = target_gap + optical_modifier
         kern_val = adjusted_target - min_dist
         
         # --- APPLY SAFETY GUARDS ---
+        # Guard 1: Hard collision check
         actual_distance = min_dist + kern_val
         if actual_distance < min_clearance:
             kern_val += (min_clearance - actual_distance)
             
-        max_negative_kern = -abs(min(adv_l, adv_r) * safe_ratio)
+        # Guard 2: The Punctuation/Tucking Fix
+        # By averaging the width rather than taking the minimum, 
+        # small characters (like full stops) inherit allowances from larger characters (like T or V)
+        # allowing them to tuck deeply into empty space.
+        avg_width = (adv_l + adv_r) / 2.0
+        max_negative_kern = -abs(avg_width * safe_ratio)
+        
         if kern_val < max_negative_kern:
             kern_val = max_negative_kern
             
@@ -199,21 +201,21 @@ if uploaded_file:
 
     st.markdown("---")
     
-    # --- SIMPLIFIED UI ---
+    # --- REFINED UI ---
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown("**Optical Spacing**")
         target_gap = st.slider("Target Gap", 0, 150, 40, 5, label_visibility="collapsed")
     with col2:
-        st.markdown("**Clash Protection Mode**")
-        safety_mode = st.radio("Safety Mode", ["Safe", "Standard", "Aggressive"], index=1, horizontal=True, label_visibility="collapsed")
+        st.markdown("**Overhang Interlock**")
+        interlock_mode = st.radio("Overhang Interlock", ["Standard", "Deep Interlock"], index=0, horizontal=True, label_visibility="collapsed")
     
     use_kerning = st.toggle("✨ Apply LazyKern", True)
     
     bytes_data = st.session_state.original_bytes
     if use_kerning:
         font = TTFont(io.BytesIO(bytes_data))
-        k = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, safety_mode)
+        k = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, interlock_mode)
         
         if k:
             fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in k.items()] + ["} kern;"]
