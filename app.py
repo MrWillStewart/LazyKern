@@ -6,7 +6,7 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.basePen import BasePen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 
-# --- 0. BRANDING & PREVIEW ENGINE ---
+# --- 0. UI & BRANDING ---
 def inject_pro_cleaner():
     st.markdown("""
     <style>
@@ -25,25 +25,27 @@ def inject_pro_cleaner():
     </style>
     """, unsafe_allow_html=True)
 
-# --- 1. CORE GEOMETRY ENGINE ---
-class ProfilePen(BasePen):
+# --- 1. SLICING ENGINE ---
+class SlicingPen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
         self.points = []
     def _moveTo(self, p): self.points.append(p)
     def _lineTo(self, p):
+        # Linear interpolation to get points on lines
         p0 = self._getCurrentPoint()
         if p0:
             dist = math.dist(p0, p)
-            steps = max(1, int(dist / 3.0))
+            steps = max(1, int(dist / 5.0))
             for i in range(steps + 1):
                 t = i / float(steps)
                 self.points.append((p0[0] + (p[0] - p0[0]) * t, p0[1] + (p[1] - p0[1]) * t))
         else: self.points.append(p)
     def _curveToOne(self, p1, p2, p3):
+        # Cubic bezier to points
         p0 = self._getCurrentPoint()
         if not p0: return
-        steps = 15
+        steps = 10
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**3 * p0[0] + 3*(1-t)**2 * t * p1[0] + 3*(1-t) * t**2 * p2[0] + t**3 * p3[0]
@@ -52,7 +54,7 @@ class ProfilePen(BasePen):
     def _qCurveToOne(self, p1, p2):
         p0 = self._getCurrentPoint()
         if not p0: return
-        steps = 15
+        steps = 10
         for i in range(steps + 1):
             t = i / float(steps)
             x = (1-t)**2 * p0[0] + 2*(1-t)*t * p1[0] + t**2 * p2[0]
@@ -65,29 +67,34 @@ def get_glyph_profiles(_font_bytes):
     head = font['head']
     h_min, h_max = head.yMin, head.yMax
     
+    # Slice into 20 horizontal segments
+    num_slices = 20
+    step = (h_max - h_min) / num_slices
+    
     glyph_set = font.getGlyphSet()
     profiles = {}
     
     for name in glyph_set.keys():
-        pen = ProfilePen(glyph_set)
+        pen = SlicingPen(glyph_set)
         try: glyph_set[name].draw(pen)
         except: continue
         if not pen.points: continue
         
-        zones = {"top": {}, "mid": {}, "bot": {}}
-        for x, y in pen.points:
-            norm_y = (y - h_min) / (h_max - h_min) if h_max > h_min else 0
-            zone = "bot" if norm_y < 0.33 else "mid" if norm_y < 0.66 else "top"
-            if x not in zones[zone] or x > zones[zone].get(x, -9999): zones[zone][y] = x
+        # Determine L/R extrema for each Y slice
+        slices_l = {i: 99999 for i in range(num_slices)}
+        slices_r = {i: -99999 for i in range(num_slices)}
         
-        xs = [p[0] for p in pen.points]
+        for x, y in pen.points:
+            idx = int((y - h_min) / step)
+            if 0 <= idx < num_slices:
+                slices_l[idx] = min(slices_l[idx], x)
+                slices_r[idx] = max(slices_r[idx], x)
+        
+        # Only keep slices that actually have data
         profiles[name] = {
             "adv": glyph_set[name].width,
-            "zones": {
-                "top": max(zones["top"].values()) if zones["top"] else None,
-                "mid": max(zones["mid"].values()) if zones["mid"] else None,
-                "bot": max(zones["bot"].values()) if zones["bot"] else None,
-            }
+            "l": {i: v for i, v in slices_l.items() if v != 99999},
+            "r": {i: v for i, v in slices_r.items() if v != -99999}
         }
     return profiles
 
@@ -95,16 +102,26 @@ def calculate_kerning(profiles, pairs, target_gap):
     kern_pairs = {}
     for l, r in pairs:
         if l not in profiles or r not in profiles: continue
-        max_overlap = 0
+        
+        # Find minimum distance across all Y slices
+        min_dist = 99999
         p_l, p_r = profiles[l], profiles[r]
-        for zone in ["top", "mid", "bot"]:
-            l_val = p_l["zones"][zone]
-            r_val = p_r["zones"][zone]
-            if l_val is not None and r_val is not None:
-                dist = r_val + p_l["adv"] - l_val
-                max_overlap = max(max_overlap, dist)
-        kern_val = int(target_gap - max_overlap)
+        
+        # Check only overlapping slices
+        common_slices = set(p_l["r"].keys()) & set(p_r["l"].keys())
+        if not common_slices: continue
+            
+        for i in common_slices:
+            # Distance = Right of LeftGlyph + AdvanceWidth - Left of RightGlyph
+            dist = (p_l["r"][i] + p_l["adv"]) - p_r["l"][i]
+            min_dist = min(min_dist, dist)
+            
+        if min_dist == 99999: continue
+            
+        kern_val = int(target_gap - min_dist)
+        # Apply slight damping to prevent extreme shifts
         if abs(kern_val) > 2: kern_pairs[(l, r)] = kern_val
+            
     return kern_pairs
 
 # --- 2. RUNTIME ---
@@ -144,4 +161,5 @@ if uploaded_file:
     fmt = "opentype" if uploaded_file.name.lower().endswith('.otf') else "truetype"
     st.markdown(f"""<style>@font-face {{font-family:'LiveFont'; src:url('data:font/{fmt};charset=utf-8;base64,{b64}');}}</style>""", unsafe_allow_html=True)
     
+    # Input
     user_text = st.text_area("Test your typography:", "HOHO TO AV")
