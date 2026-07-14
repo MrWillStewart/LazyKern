@@ -28,7 +28,6 @@ def inject_pro_cleaner():
         line-height: 1.2 !important;
         letter-spacing: normal !important;
     }
-    /* Hide Streamlit radio button visual clutter to make it look like a segmented control */
     div[role="radiogroup"] { flex-direction: row; gap: 15px; }
     </style>
     """, unsafe_allow_html=True)
@@ -78,7 +77,7 @@ def analyze_profile_zones(profile_dict, is_left_side):
     h = top_y - bot_y
     if h == 0: return "STRAIGHT"
     
-    # Slice the profile into mathematical thirds
+    # Slice profile into mathematical thirds
     top_ys = [y for y in ys if y > bot_y + h * 0.6]
     mid_ys = [y for y in ys if bot_y + h * 0.4 <= y <= bot_y + h * 0.6]
     bot_ys = [y for y in ys if y < bot_y + h * 0.4]
@@ -92,19 +91,19 @@ def analyze_profile_zones(profile_dict, is_left_side):
     x_spread = max(profile_dict.values()) - min(profile_dict.values())
     if x_spread < h * 0.08: return "STRAIGHT"
     
-    # Detect the physical shape based on which zone extends the furthest
-    if not is_left_side: # Right profile of the left letter (e.g., P, T, L)
-        if t_x > m_x + x_spread*0.15 and t_x > b_x + x_spread*0.15: return "OVERHANG_TOP"
-        if b_x > m_x + x_spread*0.15 and b_x > t_x + x_spread*0.15: return "OVERHANG_BOTTOM"
-        if m_x > t_x + x_spread*0.15 and m_x > b_x + x_spread*0.15: return "ROUND"
-        if b_x > t_x + x_spread*0.15 and m_x > t_x: return "SLOPE_OUT"
-        if t_x > b_x + x_spread*0.15 and m_x > b_x: return "SLOPE_IN"
-    else: # Left profile of the right letter (e.g., J, V, A)
-        if t_x < m_x - x_spread*0.15 and t_x < b_x - x_spread*0.15: return "OVERHANG_TOP"
-        if b_x < m_x - x_spread*0.15 and b_x < t_x - x_spread*0.15: return "OVERHANG_BOTTOM"
-        if m_x < t_x - x_spread*0.15 and m_x < b_x - x_spread*0.15: return "ROUND"
-        if b_x < t_x - x_spread*0.15 and m_x < t_x: return "SLOPE_OUT"
-        if t_x < b_x - x_spread*0.15 and m_x < b_x: return "SLOPE_IN"
+    # Detect physical shape based on which zone extends furthest outward horizontally
+    if not is_left_side: # Right profile of left letter (e.g., P, T, L)
+        if t_x > m_x + x_spread * 0.15 and t_x > b_x + x_spread * 0.15: return "OVERHANG_TOP"
+        if b_x > m_x + x_spread * 0.15 and b_x > t_x + x_spread * 0.15: return "OVERHANG_BOTTOM"
+        if m_x > t_x + x_spread * 0.15 and m_x > b_x + x_spread * 0.15: return "ROUND"
+        if b_x > t_x + x_spread * 0.15 and m_x > t_x: return "SLOPE_OUT"
+        if t_x > b_x + x_spread * 0.15 and m_x > b_x: return "SLOPE_IN"
+    else: # Left profile of right letter (e.g., J, V, A)
+        if t_x < m_x - x_spread * 0.15 and t_x < b_x - x_spread * 0.15: return "OVERHANG_TOP"
+        if b_x < m_x - x_spread * 0.15 and b_x < t_x - x_spread * 0.15: return "OVERHANG_BOTTOM"
+        if m_x < t_x - x_spread * 0.15 and m_x < b_x - x_spread * 0.15: return "ROUND"
+        if b_x < t_x - x_spread * 0.15 and m_x < t_x: return "SLOPE_OUT"
+        if t_x < b_x - x_spread * 0.15 and m_x < b_x: return "SLOPE_IN"
         
     return "STRAIGHT"
 
@@ -140,10 +139,13 @@ def get_glyph_profiles(font, step_size=5):
     return profiles
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode):
-    # Unpack UI settings
-    if overhang_mode == "Open": min_clearance, safe_ratio = 30, 0.2
-    elif overhang_mode == "Standard": min_clearance, safe_ratio = 15, 0.35
-    else: min_clearance, safe_ratio = 5, 0.55 # Deep
+    # Map overhang settings with horizontal max caps (prevents extreme overlaps on wide glyphs)
+    if overhang_mode == "Open": 
+        min_clearance, safe_ratio, max_cap = 25, 0.22, 120
+    elif overhang_mode == "Standard": 
+        min_clearance, safe_ratio, max_cap = 15, 0.30, 180
+    else: # Deep
+        min_clearance, safe_ratio, max_cap = 5, 0.45, 280
 
     kern_pairs = {}
     for left, right in pairs_to_kern:
@@ -158,7 +160,18 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode):
         common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
         if not common_ys: continue
         
-        min_dist = min((prof_r[y] + adv_l) - prof_l[y] for y in common_ys)
+        # Calculate horizontal distances at all vertical intersection points
+        distances = {y: (prof_r[y] + adv_l) - prof_l[y] for y in common_ys}
+        min_dist = min(distances.values())
+        
+        # --- SHARP EDGE / POINT-CONTACT DETECTION ---
+        tolerance = 15
+        bottleneck_slices = [y for y, d in distances.items() if d <= min_dist + tolerance]
+        num_slices = len(common_ys)
+        
+        # If the bottleneck occurs at only a tiny fraction of slices, it's a sharp point (e.g., V, A, Y)
+        is_sharp_contact = len(bottleneck_slices) <= max(2, int(num_slices * 0.12))
+        sharp_modifier = -15 if is_sharp_contact else 0
         
         # --- APPLY DYNAMIC OPTICAL MODIFIERS ---
         shape_l = profiles[left]["shape_right"] 
@@ -171,15 +184,15 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode):
         elif shape_l == "SLOPE_OUT" and shape_r == "SLOPE_IN": optical_modifier = -20 # A next to V
         elif shape_l == "SLOPE_IN" and shape_r == "SLOPE_OUT": optical_modifier = -20 # V next to A
         
-        # Tiny glyph optical bump (makes periods naturally sit closer)
+        # Scale down target gaps optical weight for tiny elements
         if h_r < h_l * 0.35 or h_l < h_r * 0.35:
             optical_modifier -= 10
 
-        adjusted_target = target_gap + optical_modifier
+        adjusted_target = target_gap + optical_modifier + sharp_modifier
         kern_val = adjusted_target - min_dist
         
         # --- APPLY SAFETY GUARDS ---
-        # Guard 1: Hard physical collision
+        # Guard 1: Hard physical collision threshold
         actual_distance = min_dist + kern_val
         if actual_distance < min_clearance:
             kern_val += (min_clearance - actual_distance)
@@ -189,25 +202,67 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, overhang_mode):
         is_tucking = overlap_h < (h_l * 0.4) or overlap_h < (h_r * 0.4)
         
         if is_tucking:
-            # If they share very little vertical space, they are tucking. 
-            # We bypass the narrow glyph penalty and use the LARGER advance to calculate limits.
             base_adv = max(adv_l, adv_r)
-            tuck_boost = 1.2 # Give it 20% more freedom to slide under
+            tuck_boost = 1.2
         else:
-            # Full-body letters (like A and l) fall back to the safe min() rule to prevent crossing.
             base_adv = min(adv_l, adv_r)
             tuck_boost = 1.0
             
         max_negative_kern = -abs(base_adv * safe_ratio * tuck_boost)
+        
+        # Apply the maximum horizontal cap to prevent monstrous, aggressive overrides
+        if abs(max_negative_kern) > max_cap:
+            max_negative_kern = -max_cap
+            
         if kern_val < max_negative_kern:
             kern_val = max_negative_kern
             
-        # Round and clean
+        # Round to font-friendly grid of 5s
         kern_val = int(round(kern_val / 5.0) * 5)
         if abs(kern_val) > 2: 
             kern_pairs[(left, right)] = kern_val
             
-    return kern_pairs
+    # --- 3. CONTEXTUAL TRIPLET KERNING ENGINE ---
+    # Automatically scan for letter-punctuation-letter combinations to prevent collision overhead
+    punctuation_glyphs = [g for g in profiles.keys() if g in ["period", "comma", "colon", "semicolon", "dot", "commaaccent"] or (0 < profiles[g]["height"] < 350)]
+    overhanging_left = [g for g in profiles.keys() if profiles[g]["shape_right"] in ["OVERHANG_TOP", "SLOPE_IN", "ROUND"]]
+    overhanging_right = [g for g in profiles.keys() if profiles[g]["shape_left"] in ["OVERHANG_TOP", "SLOPE_OUT", "ROUND"]]
+    
+    contextual_rules = []
+    for p in punctuation_glyphs:
+        for l in overhanging_left:
+            for r in overhanging_right:
+                k_lp = kern_pairs.get((l, p), 0)
+                k_pr = kern_pairs.get((p, r), 0)
+                if k_lp == 0 and k_pr == 0: continue
+                
+                p_ys = profiles[p]["right"].keys()
+                if not p_ys: continue
+                max_p_y = max(p_ys)
+                
+                prof_ll = profiles[l]["right"]
+                prof_rr = profiles[r]["left"]
+                adv_ll = profiles[l]["advance"]
+                adv_pp = profiles[p]["advance"]
+                
+                # Check the vertical clearance between the flanking letters above the punctuation mark height
+                above_ys = [y for y in set(prof_ll.keys()).intersection(set(prof_rr.keys())) if y > max_p_y]
+                if not above_ys: continue
+                
+                min_clearance_above = 99999
+                for y in above_ys:
+                    dist = (prof_rr[y] + adv_ll + adv_pp + k_lp + k_pr) - prof_ll[y]
+                    if dist < min_clearance_above:
+                        min_clearance_above = dist
+                
+                # If they collide or squeeze too tightly overhead, add padding to the middle glyph
+                safe_triplet_clearance = min_clearance + 15
+                if min_clearance_above < safe_triplet_clearance:
+                    needed_extra = int(round((safe_triplet_clearance - min_clearance_above) / 5.0) * 5)
+                    if needed_extra > 5:
+                        contextual_rules.append(f"    pos {l} {p}' {needed_extra} {r};")
+                        
+    return kern_pairs, contextual_rules
 
 # --- 2. STREAMLIT RUNTIME ---
 st.set_page_config(page_title="LazyKern Engine", layout="centered")
@@ -243,10 +298,17 @@ if uploaded_file:
     bytes_data = st.session_state.original_bytes
     if use_kerning:
         font = TTFont(io.BytesIO(bytes_data))
-        k = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, overhang_mode)
+        k, contextual_rules = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, overhang_mode)
         
-        if k:
-            fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in k.items()] + ["} kern;"]
+        if k or contextual_rules:
+            # Combine standard GPOS pairs and contextual triplet rules cleanly
+            fea = ["feature kern {"]
+            for (l, r), v in k.items():
+                fea.append(f"    pos {l} {r} {v};")
+            for rule in contextual_rules:
+                fea.append(rule)
+            fea.append("} kern;")
+            
             try:
                 addOpenTypeFeaturesFromString(font, "\n".join(fea))
                 out = io.BytesIO()
