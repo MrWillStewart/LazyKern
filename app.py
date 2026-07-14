@@ -126,10 +126,11 @@ def get_glyph_profiles(font, step_size=5):
     return profiles
 
 def calculate_kerning(profiles, pairs_to_kern, target_gap, interlock_mode):
+    # 1. Map UI to the physics engine
     if interlock_mode == "Standard": 
         min_clearance, safe_ratio = 15, 0.35 
-    else: 
-        min_clearance, safe_ratio = 5, 0.55 
+    else: # "Deep Interlock"
+        min_clearance, safe_ratio = 5, 0.55 # Allows heavy overlapping/tucking
 
     kern_pairs = {}
     for left, right in pairs_to_kern:
@@ -163,11 +164,12 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, interlock_mode):
         if actual_distance < min_clearance:
             kern_val += (min_clearance - actual_distance)
             
-        # Guard 2: The Punctuation Fix (Dominant Width)
-        # Using the maximum width gives tiny punctuation (like . or :) the full overhang 
-        # allowance of the larger character it sits next to, allowing a deep tuck.
-        dominant_width = max(adv_l, adv_r)
-        max_negative_kern = -abs(dominant_width * safe_ratio)
+        # Guard 2: The Punctuation/Tucking Fix
+        # By averaging the width rather than taking the minimum, 
+        # small characters (like full stops) inherit allowances from larger characters (like T or V)
+        # allowing them to tuck deeply into empty space.
+        avg_width = (adv_l + adv_r) / 2.0
+        max_negative_kern = -abs(avg_width * safe_ratio)
         
         if kern_val < max_negative_kern:
             kern_val = max_negative_kern
@@ -199,16 +201,11 @@ if uploaded_file:
 
     st.markdown("---")
     
-    # --- UI WITH 3-BUTTON SPACING ---
+    # --- REFINED UI ---
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown("**Optical Spacing**")
-        spacing_mode = st.radio("Optical Spacing", ["Tight", "Normal", "Open"], index=1, horizontal=True, label_visibility="collapsed")
-        
-        # Map the UI choice directly to your requested integer values
-        gap_map = {"Tight": 40, "Normal": 70, "Open": 100}
-        target_gap = gap_map[spacing_mode]
-        
+        target_gap = st.slider("Target Gap", 0, 150, 40, 5, label_visibility="collapsed")
     with col2:
         st.markdown("**Overhang Interlock**")
         interlock_mode = st.radio("Overhang Interlock", ["Standard", "Deep Interlock"], index=0, horizontal=True, label_visibility="collapsed")
