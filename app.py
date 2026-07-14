@@ -20,7 +20,7 @@ def inject_pro_cleaner():
     }
     .stTextArea textarea {
         font-family: 'LiveFont', sans-serif !important;
-        font-size: 64px !important; /* Increased for better display font preview */
+        font-size: 64px !important;
         min-height: 180px !important;
         border: 2px solid #DAE1E8 !important;
         border-radius: 10px !important;
@@ -28,10 +28,12 @@ def inject_pro_cleaner():
         line-height: 1.2 !important;
         letter-spacing: normal !important;
     }
+    /* Hide Streamlit radio button visual clutter to make it look like a segmented control */
+    div[role="radiogroup"] { flex-direction: row; gap: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 1. CORE GEOMETRY ENGINE ---
+# --- 1. CORE GEOMETRY & SHAPE ENGINE ---
 class ProfilePen(BasePen):
     def __init__(self, glyph_set):
         super().__init__(glyph_set)
@@ -41,7 +43,7 @@ class ProfilePen(BasePen):
         p0 = self._getCurrentPoint()
         if p0:
             dist = math.dist(p0, p)
-            steps = max(1, int(dist / 3.0)) # Increased resolution for display fonts
+            steps = max(1, int(dist / 3.0))
             for i in range(steps + 1):
                 t = i / float(steps)
                 self.points.append((p0[0] + (p[0] - p0[0]) * t, p0[1] + (p[1] - p0[1]) * t))
@@ -67,6 +69,40 @@ class ProfilePen(BasePen):
             y = (1-t)**2 * p0[1] + 2*(1-t)*t * p1[1] + t**2 * p2[1]
             self.points.append((x, y))
 
+def analyze_shape(profile_dict, is_left_side):
+    """ Dynamically determines if a side is STRAIGHT, ROUND, DIAGONAL, or COMPLEX """
+    if len(profile_dict) < 4: return "STRAIGHT"
+    
+    ys = sorted(profile_dict.keys())
+    top_y, bot_y = ys[-1], ys[0]
+    height = top_y - bot_y
+    if height == 0: return "STRAIGHT"
+    
+    top_x, bot_x = profile_dict[top_y], profile_dict[bot_y]
+    
+    # Sample the middle 40% of the glyph to find the "bulge" or "bridge"
+    mid_ys = [y for y in ys if bot_y + height*0.3 < y < bot_y + height*0.7]
+    if not mid_ys: return "STRAIGHT"
+    
+    mid_x_avg = sum(profile_dict[y] for y in mid_ys) / len(mid_ys)
+    
+    # Calculate horizontal spread
+    x_vals = list(profile_dict.values())
+    x_spread = max(x_vals) - min(x_vals)
+    
+    if x_spread < height * 0.12: 
+        return "STRAIGHT" # Very little horizontal movement
+        
+    expected_mid_x = (top_x + bot_x) / 2.0
+    if abs(mid_x_avg - expected_mid_x) < x_spread * 0.25:
+        return "DIAGONAL" # Smooth, linear slope between top and bottom
+        
+    # Check for outward bulge (Roundness)
+    if is_left_side and (mid_x_avg < top_x and mid_x_avg < bot_x): return "ROUND"
+    if not is_left_side and (mid_x_avg > top_x and mid_x_avg > bot_x): return "ROUND"
+        
+    return "COMPLEX"
+
 def get_glyph_profiles(font, step_size=5):
     glyph_set = font.getGlyphSet()
     profiles = {}
@@ -75,18 +111,32 @@ def get_glyph_profiles(font, step_size=5):
         try: glyph_set[name].draw(pen)
         except Exception: continue
         if not pen.points: continue
+        
         slices = {}
         for x, y in pen.points:
             y_slice = int(round(y / step_size) * step_size)
             slices.setdefault(y_slice, []).append(x)
+            
         left_prof, right_prof = {}, {}
         for y_slice, x_vals in slices.items():
             left_prof[y_slice] = min(x_vals)
             right_prof[y_slice] = max(x_vals)
-        profiles[name] = {"left": left_prof, "right": right_prof, "advance": glyph_set[name].width}
+            
+        profiles[name] = {
+            "left": left_prof, 
+            "right": right_prof, 
+            "advance": glyph_set[name].width,
+            "shape_left": analyze_shape(left_prof, is_left_side=True),
+            "shape_right": analyze_shape(right_prof, is_left_side=False)
+        }
     return profiles
 
-def calculate_kerning(profiles, pairs_to_kern, target_gap, min_clearance, safe_ratio):
+def calculate_kerning(profiles, pairs_to_kern, target_gap, safety_mode):
+    # Unpack safety modes (min_clearance, safe_ratio)
+    if safety_mode == "Safe": min_clearance, safe_ratio = 30, 0.2
+    elif safety_mode == "Standard": min_clearance, safe_ratio = 15, 0.35
+    else: min_clearance, safe_ratio = 5, 0.5 # Aggressive
+
     kern_pairs = {}
     for left, right in pairs_to_kern:
         if left not in profiles or right not in profiles: continue
@@ -96,30 +146,33 @@ def calculate_kerning(profiles, pairs_to_kern, target_gap, min_clearance, safe_r
         adv_r = profiles[right]["advance"]
         
         common_ys = set(prof_l.keys()).intersection(set(prof_r.keys()))
-        if not common_ys: continue # No horizontal overlap (e.g., period and quote)
+        if not common_ys: continue
         
-        # 1. Find the absolute closest point between the two glyphs
         min_dist = min((prof_r[y] + adv_l) - prof_l[y] for y in common_ys)
         
-        # 2. Base kerning logic: Pull them together until they hit the target gap
-        kern_val = target_gap - min_dist
+        # --- APPLY DYNAMIC OPTICAL MODIFIERS ---
+        shape_l = profiles[left]["shape_right"] # Right edge of left letter
+        shape_r = profiles[right]["shape_left"] # Left edge of right letter
         
-        # 3. PAIR GUARD: Hard Minimum Clearance 
-        # No matter the target gap, they CANNOT get closer than min_clearance
+        optical_modifier = 0
+        if shape_l == "STRAIGHT" and shape_r == "STRAIGHT": optical_modifier = 15 # Push blocks apart
+        elif shape_l == "ROUND" and shape_r == "ROUND": optical_modifier = -10 # Tuck bowls together
+        elif (shape_l == "ROUND" and shape_r == "STRAIGHT") or (shape_l == "STRAIGHT" and shape_r == "ROUND"): optical_modifier = -5
+        elif shape_l == "DIAGONAL" or shape_r == "DIAGONAL": optical_modifier = -15 # Eat up diagonal whitespace
+
+        adjusted_target = target_gap + optical_modifier
+        kern_val = adjusted_target - min_dist
+        
+        # --- APPLY SAFETY GUARDS ---
         actual_distance = min_dist + kern_val
         if actual_distance < min_clearance:
             kern_val += (min_clearance - actual_distance)
             
-        # 4. TRIPLE GUARD: The Overhang Limit
-        # Prevent A-B-C overlaps by capping how far a letter can tuck under another.
-        # We limit the negative kern value to a percentage of the narrowest letter in the pair.
         max_negative_kern = -abs(min(adv_l, adv_r) * safe_ratio)
         if kern_val < max_negative_kern:
             kern_val = max_negative_kern
             
-        # 5. Clean up values for OpenType
         kern_val = int(round(kern_val / 5.0) * 5)
-        
         if abs(kern_val) > 2: 
             kern_pairs[(left, right)] = kern_val
             
@@ -141,25 +194,26 @@ if uploaded_file:
         st.session_state.profiles = get_glyph_profiles(font)
         st.session_state.supported_chars = {chr(cp) for cp in font.getBestCmap().keys()}
         
-        # Filter out massive glyph sets to prevent freezing on load
-        # You can expand this logic later to include standard kerning groups
         glyphs = [g for g in st.session_state.profiles.keys() if g not in [".notdef", "space"]]
         st.session_state.pairs = [(a, b) for a in glyphs for b in glyphs]
 
     st.markdown("---")
+    
+    # --- SIMPLIFIED UI ---
     col1, col2 = st.columns([1, 1])
     with col1:
-        use_kerning = st.toggle("✨ Enable LazyKern", True)
+        st.markdown("**Optical Spacing**")
+        target_gap = st.slider("Target Gap", 0, 150, 40, 5, label_visibility="collapsed")
+    with col2:
+        st.markdown("**Clash Protection Mode**")
+        safety_mode = st.radio("Safety Mode", ["Safe", "Standard", "Aggressive"], index=1, horizontal=True, label_visibility="collapsed")
     
-    # Expose the physics parameters to the user
-    target_gap = st.slider("Optical Spacing (Overall Tightness)", 0, 150, 40, 5, help="How close the letters should feel overall.")
-    min_clearance = st.slider("Strict Collision Guard", 0, 100, 15, 5, help="Absolute minimum distance allowed between any two points. Prevents pair overlaps.")
-    safe_ratio = st.slider("Triple Clash Prevention", 0.1, 0.5, 0.3, 0.05, help="Caps negative kerning based on letter width. Lower = safer from 3-letter clashing (like ToT).")
+    use_kerning = st.toggle("✨ Apply LazyKern", True)
     
     bytes_data = st.session_state.original_bytes
     if use_kerning:
         font = TTFont(io.BytesIO(bytes_data))
-        k = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, min_clearance, safe_ratio)
+        k = calculate_kerning(st.session_state.profiles, st.session_state.pairs, target_gap, safety_mode)
         
         if k:
             fea = ["feature kern {"] + [f"    pos {l} {r} {v};" for (l, r), v in k.items()] + ["} kern;"]
@@ -168,7 +222,7 @@ if uploaded_file:
                 out = io.BytesIO()
                 font.save(out)
                 bytes_data = out.getvalue()
-            except Exception as e:
+            except Exception:
                 st.error("Kerning compilation failed. The font might have conflicting tables.")
 
     b64 = base64.b64encode(bytes_data).decode('utf-8')
